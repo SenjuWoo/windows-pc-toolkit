@@ -1,0 +1,25 @@
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+.claude/
+
+# Logs written by the tools (Desktop paths are outside repo; keep local noise out)
+*.log
+PC_Fixer_Log_*.txt
+PC_Privacy_Log_*.txt
+PC_Optimizer_*.json
+*_Benchmark_*.txt
+*_Benchmark_*.json
+
+# Archives / local packaging
+*.zip
+*.7z
+*.rar
+
+# Local publish staging
+_github_publish/
