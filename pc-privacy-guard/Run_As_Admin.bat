@@ -1,5 +1,5 @@
 @echo off
-title PC Privacy Guard v1.0
+title PC Privacy Guard v1.0.1
 color 0D
 
 :: SECURITY: absolute path to powershell.exe — never trust PATH or script folder.
@@ -17,7 +17,7 @@ if %errorLevel% neq 0 (
 cd /d "%~dp0"
 echo.
 echo  ====================================================
-echo     PC PRIVACY GUARD v1.0 - Running as Admin
+echo     PC PRIVACY GUARD v1.0.1 - Running as Admin
 echo     Location mask ^| Tracker kill ^| WU/Game safe
 echo  ====================================================
 echo.

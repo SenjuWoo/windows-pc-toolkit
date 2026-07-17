@@ -1,8 +1,13 @@
-# PC Privacy Guard v1.0
+# PC Privacy Guard v1.0.1
 
 **Location mask · Tracker kill · Safe for games, browsers, Windows Update**
 
 Standalone privacy toolkit that lives next to **PC Gaming Optimizer**, **PC Corruption Fixer**, and the **Encrypted DNS** scripts. It focuses on **hiding/disabling Windows location** and killing **OS-level trackers** without breaking gaming, browsing, or updates.
+
+## v1.0.1 fixes
+- **`[0] EXIT` works** — PowerShell `break` inside `switch` only left the switch; menu now uses an explicit exit flag.
+- **No more `True`/`False` spam** after every registry/service write (helpers no longer emit bools to the pipeline).
+- **TrkWks** (Distributed Link Tracking): falls back to `Set-Service` when the service key denies direct registry writes.
 
 ## Quick start
 

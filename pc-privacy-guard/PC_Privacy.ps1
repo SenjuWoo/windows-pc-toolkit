@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    PC Privacy Guard v1.0 - location mask + tracker kill without breaking games/apps/browsers/WU.
+    PC Privacy Guard v1.0.1 - location mask + tracker kill without breaking games/apps/browsers/WU.
 .DESCRIPTION
     Interactive toolkit that:
       - Disables Windows location services and geolocation providers
@@ -20,7 +20,7 @@
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 
-$Script:Version   = '1.0'
+$Script:Version   = '1.0.1'
 $Script:StartTime = Get-Date
 $Script:Results   = [ordered]@{}
 $Script:LogDir    = Join-Path $env:USERPROFILE 'Desktop'
@@ -54,14 +54,13 @@ function Set-RegDword {
         [Parameter(Mandatory)][int]$Value,
         [string]$Desc = ''
     )
+    # NOTE: do not emit $true/$false to the pipeline (leaks "True"/"False" lines in the UI)
     try {
         Ensure-Key $Path
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type DWord -Force -ErrorAction Stop
         if ($Desc) { Write-Host ("    [OK] {0}" -f $Desc) -ForegroundColor Green }
-        return $true
     } catch {
         if ($Desc) { Write-Host ("    [!!] {0} - {1}" -f $Desc, $_.Exception.Message) -ForegroundColor Yellow }
-        return $false
     }
 }
 
@@ -76,10 +75,8 @@ function Set-RegString {
         Ensure-Key $Path
         Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type String -Force -ErrorAction Stop
         if ($Desc) { Write-Host ("    [OK] {0}" -f $Desc) -ForegroundColor Green }
-        return $true
     } catch {
         if ($Desc) { Write-Host ("    [!!] {0} - {1}" -f $Desc, $_.Exception.Message) -ForegroundColor Yellow }
-        return $false
     }
 }
 
@@ -98,23 +95,34 @@ function Set-ServiceStart {
         [ValidateSet(2,3,4)][int]$Start,
         [string]$Desc = ''
     )
+    # NOTE: no pipeline bool returns (avoids console "True"/"False" spam)
     $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
     if (-not (Test-Path -LiteralPath $key)) {
         if ($Desc) { Write-Host ("    [>>] {0} - service not present" -f $Desc) -ForegroundColor DarkGray }
-        return $false
+        return
     }
+    $mode = switch ($Start) { 2 { 'Automatic' } 3 { 'Manual' } 4 { 'Disabled' } }
+    $startType = switch ($Start) { 2 { 'Automatic' } 3 { 'Manual' } 4 { 'Disabled' } }
     try {
         Set-ItemProperty -Path $key -Name 'Start' -Value $Start -Type DWord -Force -ErrorAction Stop
         $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
         if ($svc -and $Start -eq 4 -and $svc.Status -eq 'Running') {
             Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
         }
-        $mode = switch ($Start) { 2 { 'Automatic' } 3 { 'Manual' } 4 { 'Disabled' } }
         if ($Desc) { Write-Host ("    [OK] {0} -> {1}" -f $Desc, $mode) -ForegroundColor Green }
-        return $true
+        return
     } catch {
-        if ($Desc) { Write-Host ("    [!!] {0} - {1}" -f $Desc, $_.Exception.Message) -ForegroundColor Yellow }
-        return $false
+        # Protected services (e.g. TrkWks) may deny direct registry Start writes; try Set-Service
+        try {
+            Set-Service -Name $Name -StartupType $startType -ErrorAction Stop
+            $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+            if ($svc -and $Start -eq 4 -and $svc.Status -eq 'Running') {
+                Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
+            }
+            if ($Desc) { Write-Host ("    [OK] {0} -> {1} (via Set-Service)" -f $Desc, $mode) -ForegroundColor Green }
+        } catch {
+            if ($Desc) { Write-Host ("    [!!] {0} - {1}" -f $Desc, $_.Exception.Message) -ForegroundColor Yellow }
+        }
     }
 }
 
@@ -236,6 +244,7 @@ function Show-Dashboard {
 }
 
 function Show-Menu {
+    # Display only - selection is read in Main (keeps exit logic in one place)
     Write-Host '  PRIVACY MENU' -ForegroundColor Cyan
     Write-Host ("  {0}" -f ($B.H * 62)) -ForegroundColor DarkGray
     Write-Host ''
@@ -267,7 +276,6 @@ function Show-Menu {
     Write-Host '  [U]  Undo Privacy Guard changes' -ForegroundColor Red
     Write-Host '  [0]  EXIT' -ForegroundColor Red
     Write-Host ''
-    return (Read-Host '  Select option')
 }
 
 # ============================================================================
@@ -457,8 +465,8 @@ function Invoke-TelemetrySafe {
     Set-ServiceStart -Name 'RetailDemo' -Start 4 -Desc 'Retail Demo Service'
     Set-ServiceStart -Name 'wisvc' -Start 4 -Desc 'Windows Insider Service'
 
-    Set-ServiceStart -Name 'WerSvc' -Start 3 -Desc 'Windows Error Reporting -> Manual'
-    Set-ServiceStart -Name 'TrkWks' -Start 3 -Desc 'Distributed Link Tracking -> Manual'
+    Set-ServiceStart -Name 'WerSvc' -Start 3 -Desc 'Windows Error Reporting'
+    Set-ServiceStart -Name 'TrkWks' -Start 3 -Desc 'Distributed Link Tracking'
 
     Write-Status Step 'CEIP / Feedback / SQM scheduled tasks...'
     Disable-TaskPath '\Microsoft\Windows\Customer Experience Improvement Program\*'
@@ -623,11 +631,11 @@ function Invoke-Undo {
         return
     }
 
-    Set-ServiceStart -Name 'lfsvc' -Start 3 -Desc 'Geolocation -> Manual'
-    Set-ServiceStart -Name 'MapsBroker' -Start 3 -Desc 'MapsBroker -> Manual'
-    Set-ServiceStart -Name 'DiagTrack' -Start 2 -Desc 'DiagTrack -> Automatic'
-    Set-ServiceStart -Name 'dmwappushservice' -Start 3 -Desc 'dmwappush -> Manual'
-    Set-ServiceStart -Name 'WerSvc' -Start 3 -Desc 'WerSvc -> Manual'
+    Set-ServiceStart -Name 'lfsvc' -Start 3 -Desc 'Geolocation'
+    Set-ServiceStart -Name 'MapsBroker' -Start 3 -Desc 'MapsBroker'
+    Set-ServiceStart -Name 'DiagTrack' -Start 2 -Desc 'DiagTrack'
+    Set-ServiceStart -Name 'dmwappushservice' -Start 3 -Desc 'dmwappush'
+    Set-ServiceStart -Name 'WerSvc' -Start 3 -Desc 'WerSvc'
 
     $polPaths = @(
         'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors',
@@ -725,8 +733,15 @@ function Main {
     Show-Banner
     Show-Dashboard
 
-    while ($true) {
-        $sel = (Show-Menu).Trim().ToUpperInvariant()
+    # PowerShell: bare `break` inside switch only exits the switch, NOT the while loop.
+    # Use an explicit flag so [0] EXIT actually leaves the menu.
+    $menuActive = $true
+    while ($menuActive) {
+        Show-Menu
+        $raw = Read-Host '  Select option'
+        if ($null -eq $raw) { $raw = '' }
+        $sel = $raw.ToString().Trim().ToUpperInvariant()
+
         switch ($sel) {
             'A' { Invoke-FullLockdown }
             '1' { Invoke-LocationKill }
@@ -737,19 +752,33 @@ function Main {
             '6' { Invoke-TelemetrySafe }
             '7' { Invoke-InputSpeechKill }
             '8' { Invoke-BrowserPrivacyPolicies }
-            'S' { Show-Banner; Show-Dashboard; continue }
+            'S' {
+                Show-Banner
+                Show-Dashboard
+                continue
+            }
             'R' { Invoke-RestorePoint }
             'U' { Invoke-Undo }
-            '0' { break }
+            '0' {
+                $menuActive = $false
+                continue
+            }
+            '' {
+                # empty Enter - re-draw menu, do not treat as invalid hard fail
+                Show-Banner
+                Show-Dashboard
+                continue
+            }
             default {
-                Write-Host '  Invalid selection.' -ForegroundColor Red
+                Write-Host '  Invalid selection. Enter A, 0-8, S, R, or U.' -ForegroundColor Red
                 Start-Sleep -Seconds 1
                 Show-Banner
                 Show-Dashboard
                 continue
             }
         }
-        if ($sel -ne '0') {
+
+        if ($menuActive) {
             Write-Host ''
             Read-Host '  Press Enter to return to menu'
             Show-Banner
