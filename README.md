@@ -1,63 +1,80 @@
 # Windows PC Toolkit
 
-Four admin PowerShell toolkits for **Windows 10/11**:
+Safe-by-default PowerShell tools for **Windows 10/11**: repair, privacy, encrypted DNS, and gaming — rebuilt around exact snapshots, rollback, and honest diagnostics.
 
-| Folder | App | What it does |
-|--------|-----|----------------|
-| [`dns-encrypted-doh/`](dns-encrypted-doh/) | **Encrypted DNS (DoH)** | Quad9 + Mullvad AdBlock over real **HTTPS** DoH templates |
-| [`pc-gaming-optimizer/`](pc-gaming-optimizer/) | **PC Gaming Optimizer** | HAGS, NVIDIA, Game Mode, bloat kill, network, timer, game booster |
-| [`pc-corruption-fixer/`](pc-corruption-fixer/) | **PC Corruption Fixer** | SFC/DISM, WU repair, network reset, health report, AI bloat removal |
-| [`pc-privacy-guard/`](pc-privacy-guard/) | **PC Privacy Guard** | Location mask + tracker kill **without** breaking WU, games, or browsers |
+| Folder | Version | Purpose |
+|--------|--------:|---------|
+| [`pc-corruption-fixer/`](pc-corruption-fixer/) | **7.1.1** | SFC/DISM, disk repair, Windows Update repair, diagnostics, reversible AI privacy policies |
+| [`pc-privacy-guard/`](pc-privacy-guard/) | **2.0** | Balanced or Strict privacy profiles with exact undo |
+| [`dns-encrypted-doh/`](dns-encrypted-doh/) | **2.1** | One-provider-at-a-time Windows DNS-over-HTTPS manager |
+| [`pc-gaming-optimizer/`](pc-gaming-optimizer/) | **4.0** | Diagnostics + reversible supported gaming settings (no tweak pile) |
 
-All launchers elevate with an **absolute** `System32\WindowsPowerShell\v1.0\powershell.exe` path (no PATH hijack).
+## Why this rewrite exists
+
+Earlier releases could “fix” things that made systems worse: Full Repair also reset networking, undo scripts guessed defaults, DNS mixed providers, and the gaming pack applied permanent timer/NIC/GPU registry hacks.
+
+**v2.x toolkit design:**
+
+- **JSON snapshots** under `%ProgramData%\WindowsPCToolkit` — restore what was actually there
+- **Full Repair does not reset the network stack**
+- **Network reset** aborts without a backup, preserves automatic vs static DNS, verifies DoH rollback
+- **Encrypted DNS**: one provider profile, official HTTPS DoH templates, no plaintext UDP fallback
+- **Gaming**: measurement-first; no permanent timer, Nagle, SysMain, MSI, PowerMizer, or standby-purge hacks
+- **Privacy**: Balanced preserves WU/games/browsers/location; Strict is separate and confirmed
+- **AI privacy**: policy-only and reversible — never uninstalls apps or disables Search/services
 
 ## Quick start
 
-1. Clone or download this repo.
-2. Open the folder for the tool you want.
-3. Right-click / double-click the `Run_As_Admin.bat` (or DNS bat).
-4. Accept UAC.
-5. Restart when a tool says so.
+1. Download a [release](https://github.com/ShugokiFable/windows-pc-toolkit/releases) or clone this repo.
+2. Double-click **`START_TOOLKIT.bat`** for the launcher menu, **or** open a tool folder and run its `.bat`.
+3. Accept UAC.
+4. Prefer safe defaults; read each tool’s README before Strict mode or network reset.
 
 ```text
 windows-pc-toolkit/
-  dns-encrypted-doh/          DNS_Set_Quad9_Mullvad.bat
-  pc-gaming-optimizer/        Run_As_Admin.bat
-  pc-corruption-fixer/        Fix_Corruption.bat
-  pc-privacy-guard/           Run_As_Admin.bat
+  START_TOOLKIT.bat              # one menu for all tools + Validate_All
+  Validate_All.ps1               # static safety/parser checks
+  pc-corruption-fixer/           Fix_Corruption.bat
+  pc-privacy-guard/              Run_As_Admin.bat
+  dns-encrypted-doh/             DNS_Encrypted_Manager.bat
+  pc-gaming-optimizer/           Run_As_Admin.bat
 ```
 
-## Safety principles (shared)
+All launchers elevate with an **absolute**  
+`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` path (no PATH hijack).
 
-- **Windows Update safe** — Delivery Optimization (`DoSvc`) is kept; telemetry never forced to Level 0.
-- **Games safe** — Xbox / Game Bar services left alone; camera/mic not killed by Privacy Guard.
-- **Browsers safe** — policy-level telemetry/AI only; no proxy/homepage hijacks.
-- **Undo paths** — Optimizer has Undo All; Privacy Guard has Undo; Fixer is repair-oriented.
-- **Sleep-safe long runs** — Optimizer / Fixer block modern standby during long batches and release on exit.
+## State locations
 
-## Encrypted DNS note
+| Tool | Snapshots |
+|------|-----------|
+| Gaming Optimizer | `%ProgramData%\WindowsPCToolkit\GamingOptimizer\Snapshots` |
+| Privacy Guard | `%ProgramData%\WindowsPCToolkit\PrivacyGuard\Snapshots` |
+| Encrypted DNS | `%ProgramData%\WindowsPCToolkit\EncryptedDNS\Snapshots` |
+| Corruption Fixer | `%ProgramData%\WindowsPCToolkit\PCFixer\NetworkSnapshots` · `AIFeatureSnapshots` |
 
-Plain DNS IPs alone are **not** encrypted. The DNS pack registers official DoH HTTPS templates:
+## Validate
 
-| Provider | IP | DoH template |
-|----------|-----|--------------|
-| Quad9 | `9.9.9.9` | `https://dns.quad9.net/dns-query` |
-| Mullvad AdBlock | `194.242.2.3` | `https://adblock.dns.mullvad.net/dns-query` |
+On Windows, run elevated:
 
-Requires Windows 11 / Server 2022+ DoH client APIs for full HTTPS tunneling. Adapters are **auto-detected** (not hard-coded to `Ethernet`).
+```powershell
+.\Validate_All.ps1
+```
 
-IP-based website geolocation is separate from Windows location APIs — use **Privacy Guard** for OS location + **Encrypted DNS / VPN** for the network layer.
+Uses Microsoft’s PowerShell parser on every script, checks launcher paths and DoH templates, and rejects reintroduced unsafe optimization writes.
 
 ## Requirements
 
-- Windows 10 (2004+) or Windows 11
-- PowerShell 5.1+ (built-in)
-- Administrator rights for almost everything
+- Windows 10 (2004+) or Windows 11  
+- PowerShell 5.1+ (built-in)  
+- Administrator rights for almost everything  
+- Full DoH APIs: Windows 11 / Server 2022+ recommended for Encrypted DNS
 
 ## License
 
-MIT — free to use, modify, and share. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 ## Disclaimer
 
 These scripts change Windows services, registry policies, and network settings. Create a **System Restore point** first (tools offer this where it matters). You run them at your own risk. No warranty.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full rebuild notes.

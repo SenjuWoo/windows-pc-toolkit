@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-    PC Corruption Fixer v6.3 - Advanced system repair and maintenance toolkit.
+    PC Corruption Fixer v7.1 - Advanced system repair and diagnostics toolkit.
 .DESCRIPTION
     Repairs corrupted system files, fixes Windows Update safely, clears caches,
     resets networking, deep-cleans components, checks disk health, manages
@@ -10,15 +10,32 @@
     Requires Administrator. Run via Fix_Corruption.bat or right-click -> Run with PowerShell.
     Log file saved to: $env:USERPROFILE\Desktop\PC_Fixer_Log_*.txt
 
+    v7.1 CHANGES:
+    - REBUILT: AI Feature Privacy [23] is now policy-only and fully reversible.
+      It no longer disables services, removes AppX packages, or breaks Windows
+      Search. Exact registry state is saved before every change.
+
+    v7.0 CHANGES:
+    - FIXED: Disk scan now uses Repair-Volume -Scan first. chkdsk /scan is a
+      fallback, so PowerShell pipeline access-denied failures no longer create
+      a false CHKDSK failure. Timing includes every fallback path.
+    - SAFER FULL REPAIR: no longer resets Winsock/TCP/IP during routine system
+      repair. It performs a non-destructive network/DNS health refresh instead.
+    - DNS-SAFE RESET: explicit Network Reset snapshots and restores adapter DNS
+      addresses and DoH templates so encrypted DNS is not silently erased.
+    - SAFE CACHE DEFAULT: Recycle Bin deletion is separately opt-in.
+    - DASHBOARD: a stopped Manual/trigger-start Windows Update service is shown
+      as ready, not falsely reported as broken.
+
     v6.3 CHANGES:
     - SLEEP-FREE: long repairs (SFC/DISM/Full Repair/WU) block modern standby so
       the PC cannot sleep mid-scan; stay-awake is always released on exit.
     - Network Diagnostics now reports DNS-over-HTTPS (DoH) template status.
     - TcpClient disposed cleanly; launcher version aligned to 6.3.
 
-    v6.2 CHANGES:
-    - NEW: Remove AI Bloat [23] - disables Windows Copilot, Recall, Windows AI
-      features, Edge/Chrome Copilot, and removes Copilot AppX packages.
+    v6.2 CHANGES (legacy behavior removed in v7.1):
+    - The old AI-bloat routine used destructive service/AppX/search edits. v7.1
+      replaces it with a reversible policy manager.
 
     v6.1 CHANGES:
     - NEW: Fix Performance Counters [21] - lodctr /R rebuild (64+32-bit) plus
@@ -71,7 +88,7 @@ $ProgressPreference = 'SilentlyContinue'
 #  CONFIGURATION
 # ============================================================================
 
-$Script:Version    = '6.3'
+$Script:Version    = '7.1.1'
 $Script:LogDir     = "$env:USERPROFILE\Desktop"
 $Script:LogName    = "PC_Fixer_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 $Script:LogPath    = Join-Path $Script:LogDir $Script:LogName
@@ -318,6 +335,52 @@ function Invoke-Native-Quiet {
         [string]$BaseDir
     )
     Invoke-Native -FilePath $FilePath -ArgumentList $ArgumentList -Quiet -BaseDir $BaseDir
+}
+
+
+function Invoke-NativeProcessSafe {
+    # ProcessStartInfo fallback for native tools that PowerShell's invocation
+    # pipeline refuses to start. Intended for short, simple argument lists.
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [switch]$Quiet,
+        [string]$BaseDir
+    )
+    $exe = Resolve-SystemTool $FilePath -BaseDir $BaseDir
+    if (-not $exe) { return [PSCustomObject]@{ ExitCode = 9009; Output = "Tool not found: $FilePath" } }
+    $quoted = foreach ($arg in $ArgumentList) {
+        if ($arg -match '[\s"]') { '"' + ($arg -replace '"','\"') + '"' } else { $arg }
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = ($quoted -join ' ')
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    try {
+        if (-not $process.Start()) { throw 'Process did not start.' }
+        # Read both streams concurrently to avoid a full stderr/stdout pipe
+        # blocking the child process on unusually verbose native tools.
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $parts = @()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) { $parts += $stdout }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) { $parts += $stderr }
+        $output = ($parts -join [Environment]::NewLine).Trim()
+        if (-not $Quiet -and $output) { Write-Host $output }
+        return [PSCustomObject]@{ ExitCode = $process.ExitCode; Output = $output }
+    } catch {
+        $message = "ERROR running $([IO.Path]::GetFileName($exe)): $($_.Exception.Message)"
+        if (-not $Quiet) { Write-Warning $message }
+        return [PSCustomObject]@{ ExitCode = 1; Output = $message }
+    } finally { $process.Dispose() }
 }
 
 function Stop-ServiceSafely {
@@ -568,18 +631,26 @@ function Show-Dashboard {
         Write-Host '(unavailable)' -ForegroundColor DarkGray
     }
 
-    # Windows Update status
+    # Windows Update uses Manual/trigger start on modern Windows and normally
+    # stops while idle. Stopped is healthy unless the service is disabled.
     try {
         $wuSvc = Get-Service -Name wuauserv -EA SilentlyContinue
+        $wuCim = Get-CimInstance Win32_Service -Filter "Name='wuauserv'" -EA SilentlyContinue
         $wuDetectKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect'
         $wuDetect = (Get-ItemProperty $wuDetectKey -Name 'LastSuccessTime' -EA SilentlyContinue).LastSuccessTime
         Write-Host '  Win Upd  : ' -ForegroundColor Gray -NoNewline
-        if ($wuSvc -and $wuSvc.Status -eq 'Running') {
-            $wuText = 'Service running'
+        if (-not $wuSvc -or -not $wuCim) {
+            Write-Host 'Service unavailable' -ForegroundColor Yellow
+        } elseif ($wuCim.StartMode -eq 'Disabled') {
+            Write-Host 'DISABLED' -ForegroundColor Red
+        } elseif ($wuSvc.Status -eq 'Running') {
+            $wuText = "Running ($($wuCim.StartMode))"
             if ($wuDetect) { $wuText += "  (last scan: $wuDetect)" }
             Write-Host $wuText -ForegroundColor White
         } else {
-            Write-Host 'Service NOT running' -ForegroundColor Red
+            $wuText = "Ready ($($wuCim.StartMode)/trigger start; idle now)"
+            if ($wuDetect) { $wuText += "  (last scan: $wuDetect)" }
+            Write-Host $wuText -ForegroundColor Green
         }
     } catch {
         Write-Host '  Win Upd  : ' -ForegroundColor Gray -NoNewline
@@ -624,20 +695,20 @@ function Show-Menu {
     Write-Host "  $($B.H * 62)" -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  [1]  * FULL REPAIR (Recommended)' -ForegroundColor Green
-    Write-Host '       SFC + DISM + Caches + Network + Disk Health'
+    Write-Host '       SFC + conditional DISM + safe caches + network health + disk scan'
     Write-Host ''
     Write-Host '  SYSTEM REPAIR' -ForegroundColor DarkCyan
     Write-Host "  $($B.MH * 40)" -ForegroundColor DarkGray
     Write-Host '  [2]  SFC & DISM System Repair' -ForegroundColor White
     Write-Host '       System file check + component store repair'
     Write-Host '  [3]  Clear All Caches (Safe)' -ForegroundColor White
-    Write-Host '       DNS, Temp, Thumbnails - preserves Update data'
+    Write-Host '       DNS, Temp, Thumbnails - Recycle Bin is opt-in'
     Write-Host '  [4]  Reset Network Stack' -ForegroundColor White
-    Write-Host '       Winsock, IP, DNS, Firewall (brief disconnect)'
+    Write-Host '       Explicit repair; DNS/DoH is backed up and restored'
     Write-Host '  [5]  DISM Deep Component Cleanup' -ForegroundColor White
     Write-Host '       Component cleanup (ResetBase is optional)'
     Write-Host '  [6]  CHKDSK Disk Health Check' -ForegroundColor White
-    Write-Host '       Online scan for disk errors (C:)'
+    Write-Host '       Repair-Volume online scan on the Windows drive'
     Write-Host ''
     Write-Host '  WINDOWS UPDATE & STORE' -ForegroundColor DarkCyan
     Write-Host "  $($B.MH * 40)" -ForegroundColor DarkGray
@@ -677,8 +748,8 @@ function Show-Menu {
     Write-Host '       Rebuild counter registry (fixes Perflib errors)'
     Write-Host '  [22] Orphaned Service Cleanup' -ForegroundColor White
     Write-Host '       Find services left behind by uninstalled apps'
-    Write-Host '  [23] Remove AI Bloat' -ForegroundColor White
-    Write-Host '       Windows Copilot, Recall, AI features, Edge/Chrome AI'
+    Write-Host '  [23] AI Feature Privacy' -ForegroundColor White
+    Write-Host '       Reversible Copilot, Recall, Edge and Chrome AI policies'
     Write-Host '  [20] Export HTML Health Report' -ForegroundColor White
     Write-Host '       Styled report, opens in your browser'
     Write-Host ''
@@ -809,7 +880,7 @@ function Invoke-DismRepair {
 # ============================================================================
 
 function Invoke-CacheCleanup {
-    param([int]$Step = 0, [int]$Total = 0)
+    param([int]$Step = 0, [int]$Total = 0, [switch]$IncludeRecycleBin)
 
     if ($Total -gt 0) { Write-StepHeader 'Cache Cleanup (Safe)' $Step $Total }
     else { Write-StepHeader 'Cache Cleanup (Safe)' }
@@ -866,11 +937,16 @@ function Invoke-CacheCleanup {
         }
     } catch { Write-Status Warn 'Thumbnail cache skipped.' }
 
-    # Recycle Bin
-    try {
-        Clear-RecycleBin -Force -EA Stop
-        Write-Status OK 'Recycle Bin emptied.'
-    } catch { Write-Status OK 'Recycle Bin already empty or inaccessible.' }
+    # Recycle Bin is personal data, not a cache required for system repair.
+    # It is never emptied by Full Repair and is opt-in for menu option [3].
+    if ($IncludeRecycleBin) {
+        try {
+            Clear-RecycleBin -Force -EA Stop
+            Write-Status OK 'Recycle Bin emptied by explicit request.'
+        } catch { Write-Status Info 'Recycle Bin already empty or inaccessible.' }
+    } else {
+        Write-Status Skip 'Recycle Bin preserved.'
+    }
 
     # Delivery Optimization cache (official cmdlet, safe to clear)
     try {
@@ -890,11 +966,131 @@ function Invoke-CacheCleanup {
     # Deleting SoftwareDistribution\Download breaks in-progress updates
     # and can corrupt the WU database. Use [7] Repair Windows Update instead.
 
-    $Script:Results['Caches'] = 'PASS - Caches cleaned (Update data preserved)'
+    $Script:Results['Caches'] = 'PASS - Safe caches cleaned (Update data and Recycle Bin preserved unless requested)'
 }
 
 # ============================================================================
-#  REPAIR: NETWORK RESET
+#  NETWORK STATE BACKUP / NON-DESTRUCTIVE HEALTH REFRESH
+# ============================================================================
+
+function Get-StaticNetworkDnsServers {
+    param([Parameter(Mandatory)]$Adapter)
+    $guid = $Adapter.InterfaceGuid.ToString().Trim('{}')
+    $paths = @{
+        IPv4 = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{$guid}"
+        IPv6 = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\{$guid}"
+    }
+    $result = [ordered]@{ IPv4 = @(); IPv6 = @() }
+    foreach ($family in @('IPv4','IPv6')) {
+        $raw = ''
+        try { $raw = [string](Get-ItemPropertyValue -LiteralPath $paths[$family] -Name 'NameServer' -EA Stop) } catch { }
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $result[$family] = @($raw -split '[,;\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+    }
+    [PSCustomObject]$result
+}
+
+function Backup-NetworkDnsState {
+    try {
+        $stateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\NetworkSnapshots'
+        if (-not (Test-Path -LiteralPath $stateRoot)) { New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null }
+        $adapters = foreach ($adapter in Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -notmatch 'Loopback' }) {
+            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -EA SilentlyContinue
+            $static = Get-StaticNetworkDnsServers -Adapter $adapter
+            [PSCustomObject]@{
+                InterfaceIndex = $adapter.ifIndex
+                InterfaceGuid = $adapter.InterfaceGuid.ToString()
+                Name = $adapter.Name
+                Automatic = (@($static.IPv4).Count -eq 0 -and @($static.IPv6).Count -eq 0)
+                StaticIPv4 = @($static.IPv4)
+                StaticIPv6 = @($static.IPv6)
+                EffectiveIPv4 = @(($dns | Where-Object AddressFamily -eq 2).ServerAddresses | Where-Object { $_ })
+                EffectiveIPv6 = @(($dns | Where-Object AddressFamily -eq 23).ServerAddresses | Where-Object { $_ })
+            }
+        }
+        $doh = @()
+        if (Get-Command Get-DnsClientDohServerAddress -EA SilentlyContinue) {
+            $doh = @(Get-DnsClientDohServerAddress -EA SilentlyContinue | ForEach-Object {
+                [PSCustomObject]@{
+                    ServerAddress = $_.ServerAddress
+                    DohTemplate = $_.DohTemplate
+                    AllowFallbackToUdp = [bool]$_.AllowFallbackToUdp
+                    AutoUpgrade = [bool]$_.AutoUpgrade
+                }
+            })
+        }
+        $snapshot = [PSCustomObject]@{ Schema = 2; Created = (Get-Date).ToString('o'); Adapters = @($adapters); DoH = @($doh) }
+        $path = Join-Path $stateRoot ("network_dns_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
+        $snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+        Write-Status OK "DNS/DoH state backed up: $path"
+        return $path
+    } catch {
+        Write-Status Warn "Could not back up DNS state: $_"
+        return $null
+    }
+}
+
+function Restore-NetworkDnsState {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        foreach ($adapter in @($snapshot.Adapters)) {
+            if (-not (Get-NetAdapter -InterfaceIndex ([int]$adapter.InterfaceIndex) -EA SilentlyContinue)) { continue }
+            if ($adapter.PSObject.Properties.Name -contains 'Automatic') {
+                if ([bool]$adapter.Automatic) {
+                    Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ResetServerAddresses -EA Stop
+                    Write-Status OK "Restored automatic/DHCP DNS on $($adapter.Name)."
+                } else {
+                    $addresses = @($adapter.StaticIPv4) + @($adapter.StaticIPv6) | Where-Object { $_ }
+                    if ($addresses.Count -eq 0) { throw "Snapshot for $($adapter.Name) says static DNS but contains no static addresses." }
+                    Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ServerAddresses $addresses -EA Stop
+                    Write-Status OK "Restored static DNS on $($adapter.Name): $($addresses -join ', ')"
+                }
+            } else {
+                $addresses = @($adapter.IPv4) + @($adapter.IPv6) | Where-Object { $_ }
+                if ($addresses.Count -gt 0) { Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ServerAddresses $addresses -EA Stop }
+                else { Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ResetServerAddresses -EA Stop }
+                Write-Status Warn "Restored $($adapter.Name) from a legacy snapshot that did not record DHCP/static mode."
+            }
+        }
+        if (Get-Command Add-DnsClientDohServerAddress -EA SilentlyContinue) {
+            foreach ($entry in @($snapshot.DoH)) {
+                $current = Get-DnsClientDohServerAddress -ServerAddress $entry.ServerAddress -EA SilentlyContinue
+                if (-not $current -or $current.DohTemplate -ne $entry.DohTemplate -or [bool]$current.AllowFallbackToUdp -ne [bool]$entry.AllowFallbackToUdp -or [bool]$current.AutoUpgrade -ne [bool]$entry.AutoUpgrade) {
+                    Remove-DnsClientDohServerAddress -ServerAddress $entry.ServerAddress -EA SilentlyContinue
+                    Add-DnsClientDohServerAddress -ServerAddress $entry.ServerAddress -DohTemplate $entry.DohTemplate -AllowFallbackToUdp ([bool]$entry.AllowFallbackToUdp) -AutoUpgrade ([bool]$entry.AutoUpgrade) -EA Stop
+                }
+            }
+        }
+        Write-Status OK 'Adapter DNS mode and registered DoH templates restored.'
+        return $true
+    } catch {
+        Write-Status Warn "DNS restore had an error: $_"
+        return $false
+    }
+}
+
+function Invoke-NetworkHealthRefresh {
+    param([int]$Step = 0, [int]$Total = 0)
+    if ($Total -gt 0) { Write-StepHeader 'Network Health + DNS Refresh' $Step $Total }
+    else { Write-StepHeader 'Network Health + DNS Refresh' }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
+    Write-Status OK 'DNS resolver cache flushed. Adapter DNS and DoH settings preserved.'
+    $dnsOK = $false; $httpsOK = $false
+    try { Resolve-DnsName -Name 'www.microsoft.com' -DnsOnly -EA Stop | Out-Null; $dnsOK = $true; Write-Status OK 'DNS resolution test passed.' }
+    catch { Write-Status Warn "DNS resolution test failed: $_" }
+    try { $t = Test-NetConnection -ComputerName 'www.microsoft.com' -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue; if ($t) { $httpsOK = $true; Write-Status OK 'HTTPS connectivity test passed.' } else { Write-Status Warn 'HTTPS connectivity test failed.' } }
+    catch { Write-Status Warn "HTTPS test unavailable: $_" }
+    if ($dnsOK -and $httpsOK) { $Script:Results['Network'] = 'PASS - DNS and HTTPS healthy (settings preserved)' }
+    else { $Script:Results['Network'] = 'WARN - Network health check needs review' }
+    $sw.Stop(); Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
+}
+
+# ============================================================================
+#  REPAIR: NETWORK RESET (EXPLICIT ONLY)
 # ============================================================================
 
 function Invoke-NetworkReset {
@@ -903,52 +1099,78 @@ function Invoke-NetworkReset {
     if ($Total -gt 0) { Write-StepHeader 'Network Stack Reset' $Step $Total }
     else { Write-StepHeader 'Network Stack Reset' }
 
-    Write-Host '  !! WARNING: Your network will disconnect briefly.' -ForegroundColor Yellow
+    Write-Host '  !! WARNING: Your network may disconnect briefly.' -ForegroundColor Yellow
     Write-Host ''
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-    Write-Status Info 'Releasing IP address...'
-    $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/release'
-    Start-Sleep -Seconds 2
-    Write-Status OK 'IP released.'
-
-    Write-Status Info 'Renewing IP address...'
-    $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/renew'
-    Start-Sleep -Seconds 3
-    Write-Status OK 'IP renewed.'
+    $dnsSnapshot = Backup-NetworkDnsState
+    if (-not $dnsSnapshot) {
+        Write-Status Fail 'Network reset aborted because DNS/DoH state could not be backed up.'
+        $Script:Results['Network'] = 'FAIL - Backup failed; reset not attempted'
+        $Script:HasFailure = $true
+        $sw.Stop(); Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
+        return
+    }
 
     Write-Status Info 'Flushing DNS...'
-    $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
-    Write-Status OK 'DNS flushed.'
+    $flush = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
+    if ($flush.ExitCode -eq 0) { Write-Status OK 'DNS flushed.' } else { Write-Status Warn "DNS flush exited with code $($flush.ExitCode)." }
 
     Write-Status Info 'Resetting Winsock catalog...'
-    $null = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'winsock', 'reset'
-    Write-Status OK 'Winsock reset.'
+    $winsock = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'winsock', 'reset'
+    if ($winsock.ExitCode -eq 0) { Write-Status OK 'Winsock reset.' }
+    else {
+        Write-Status Fail "Winsock reset failed with exit code $($winsock.ExitCode)."
+        $Script:Results['Network'] = 'FAIL - Winsock reset failed'
+        $Script:HasFailure = $true
+        $sw.Stop(); Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
+        return
+    }
 
-    Write-Status Info 'Resetting TCP/IP stack...'
-    $null = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'int', 'ip', 'reset'
-    Write-Status OK 'TCP/IP reset.'
+    Write-Host ''
+    Write-Host '  TCP/IP reset is deeper and can remove custom static IP, gateway,' -ForegroundColor Yellow
+    Write-Host '  VLAN, VPN, and adapter settings. This tool backs up DNS/DoH only.' -ForegroundColor Yellow
+    $tcpChoice = Read-Host '  Also reset the TCP/IP stack? (y/N)'
+    $tcpReset = $false
+    if ($tcpChoice -eq 'y' -or $tcpChoice -eq 'Y') {
+        Write-Status Info 'Resetting TCP/IP stack...'
+        $tcp = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'int', 'ip', 'reset'
+        if ($tcp.ExitCode -eq 0) { Write-Status OK 'TCP/IP reset.'; $tcpReset = $true }
+        else { Write-Status Warn "TCP/IP reset exited with code $($tcp.ExitCode)." }
+    } else {
+        Write-Status Skip 'TCP/IP reset skipped; custom adapter settings preserved.'
+    }
 
     # Firewall reset deletes ALL custom firewall rules - make it opt-in.
     Write-Host ''
     $fwChoice = 'n'
     if ($SkipFirewall) {
-        Write-Status Skip 'Firewall reset skipped in Full Repair (run [4] to reset it).'
+        Write-Status Skip 'Firewall reset skipped.'
     } else {
         Write-Host '  !! Resetting the firewall deletes ALL custom firewall rules' -ForegroundColor Yellow
         Write-Host '  !! (VPN, game, and app rules will need to be re-created).' -ForegroundColor Yellow
         $fwChoice = Read-Host '  Also reset Windows Firewall to defaults? (y/N)'
     }
+    $firewallReset = $false
     if ($fwChoice -eq 'y' -or $fwChoice -eq 'Y') {
-        $null = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'advfirewall', 'reset'
-        Write-Status OK 'Firewall reset to defaults.'
-        $Script:Results['Network'] = 'PASS - Stack + firewall reset'
+        $fw = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'advfirewall', 'reset'
+        if ($fw.ExitCode -eq 0) { Write-Status OK 'Firewall reset to defaults.'; $firewallReset = $true }
+        else { Write-Status Warn "Firewall reset exited with code $($fw.ExitCode)." }
     } else {
         Write-Status Skip 'Firewall reset skipped (custom rules preserved).'
-        $Script:Results['Network'] = 'PASS - Stack reset (firewall kept)'
     }
 
+    if (-not (Restore-NetworkDnsState -Path $dnsSnapshot)) {
+        Write-Status Fail "DNS/DoH rollback failed. Restore manually from: $dnsSnapshot"
+        $Script:Results['Network'] = 'FAIL - Reset ran, but DNS rollback failed'
+        $Script:HasFailure = $true
+    } else {
+        $parts = @('Winsock')
+        if ($tcpReset) { $parts += 'TCP/IP' }
+        if ($firewallReset) { $parts += 'firewall' }
+        $Script:Results['Network'] = "PASS - $($parts -join ' + ') reset; DNS state restored"
+    }
+    Write-Status Info 'A reboot is required to complete Winsock or TCP/IP reset changes.'
     $sw.Stop()
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 }
@@ -1011,49 +1233,65 @@ function Invoke-DeepCleanup {
 function Invoke-DiskCheck {
     param([int]$Step = 0, [int]$Total = 0)
 
-    if ($Total -gt 0) { Write-StepHeader 'CHKDSK - Disk Health Check' $Step $Total }
-    else { Write-StepHeader 'CHKDSK - Disk Health Check' }
+    if ($Total -gt 0) { Write-StepHeader 'Disk Health - Online Scan' $Step $Total }
+    else { Write-StepHeader 'Disk Health - Online Scan' }
 
-    Write-Status Info 'Running online scan on C: (no reboot needed)...'
+    $driveLetter = $env:SystemDrive.TrimEnd('\').TrimEnd(':')
+    Write-Status Info "Running Repair-Volume -Scan on $driveLetter`: (online, no reboot needed)..."
     Write-Host ''
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $chk = Invoke-Native -FilePath 'chkdsk.exe' -ArgumentList 'C:', '/scan'
-    $sw.Stop()
-
-    if ($chk.ExitCode -eq 0) {
-        Write-Status OK 'Disk check complete - no errors found.'
-        $Script:Results['CHKDSK'] = 'PASS - No errors'
-    } elseif ($chk.ExitCode -eq 2 -or $chk.ExitCode -eq 3) {
-        Write-Status Warn 'Disk check found errors that may require offline repair.'
-        Write-Host '  !! Run manually: chkdsk C: /f /r  then reboot.' -ForegroundColor Yellow
-        $Script:Results['CHKDSK'] = 'WARN - Needs offline repair (/f /r)'
-    } elseif ($chk.Output -match 'Access is denied') {
-        # Seen on some systems even when elevated (filter drivers / tamper
-        # protection can block chkdsk's online scan). Repair-Volume uses a
-        # different path and usually works.
-        Write-Status Warn 'chkdsk was blocked. Falling back to Repair-Volume scan...'
-        try {
-            $rv = Repair-Volume -DriveLetter C -Scan -ErrorAction Stop
-            if ("$rv" -match 'NoErrorsFound') {
-                Write-Status OK "Repair-Volume scan: $rv"
-                $Script:Results['CHKDSK'] = 'PASS - No errors (Repair-Volume)'
-            } else {
-                Write-Status Warn "Repair-Volume scan result: $rv"
-                Write-Host '  !! Errors found. Run: chkdsk C: /f /r  then reboot.' -ForegroundColor Yellow
-                $Script:Results['CHKDSK'] = "WARN - $rv (Repair-Volume)"
-            }
-        } catch {
-            Write-Status Fail "Disk scan blocked and Repair-Volume also failed: $_"
-            $Script:Results['CHKDSK'] = 'FAIL - Scan blocked'
-            $Script:HasFailure = $true
+    $usedFallback = $false
+    try {
+        if (-not (Get-Command Repair-Volume -EA SilentlyContinue)) { throw 'Repair-Volume cmdlet is unavailable.' }
+        $rv = Repair-Volume -DriveLetter $driveLetter -Scan -ErrorAction Stop
+        $resultText = "$rv"
+        if ($resultText -match 'NoErrorsFound') {
+            Write-Status OK "Repair-Volume scan: $resultText"
+            $Script:Results['Disk'] = 'PASS - No errors'
+        } elseif ($resultText -match 'ScanNeeded|SpotFixNeeded|RebootRequired') {
+            Write-Status Warn "Repair-Volume scan result: $resultText"
+            Write-Status Info "For an offline repair, run: Repair-Volume -DriveLetter $driveLetter -OfflineScanAndFix"
+            $Script:Results['Disk'] = "WARN - $resultText"
+        } else {
+            Write-Status Warn "Repair-Volume returned: $resultText"
+            $Script:Results['Disk'] = "WARN - $resultText"
         }
-    } else {
-        Write-Status Fail "Disk check exited with code $($chk.ExitCode)."
-        $Script:Results['CHKDSK'] = "FAIL - Exit code $($chk.ExitCode)"
-        $Script:HasFailure = $true
+    } catch {
+        $usedFallback = $true
+        Write-Status Warn "Repair-Volume could not run: $($_.Exception.Message)"
+        Write-Status Info 'Falling back to chkdsk /scan...'
+        $chk = Invoke-NativeProcessSafe -FilePath 'chkdsk.exe' -ArgumentList "$driveLetter`:", '/scan'
+        switch ($chk.ExitCode) {
+            0 {
+                Write-Status OK 'chkdsk scan completed; no errors were found.'
+                $Script:Results['Disk'] = 'PASS - No errors (chkdsk fallback)'
+            }
+            1 {
+                Write-Status Warn 'chkdsk found and fixed file-system errors.'
+                $Script:Results['Disk'] = 'WARN - Errors found and fixed by chkdsk'
+            }
+            2 {
+                Write-Status Warn 'chkdsk reported cleanup activity or errors that were not repaired because /f was not used.'
+                Write-Status Info "Run: Repair-Volume -DriveLetter $driveLetter -OfflineScanAndFix"
+                $Script:Results['Disk'] = 'WARN - Offline repair may be needed'
+            }
+            3 {
+                Write-Status Fail 'chkdsk could not complete the check or could not repair detected errors.'
+                Write-Status Info "Run: Repair-Volume -DriveLetter $driveLetter -OfflineScanAndFix"
+                $Script:Results['Disk'] = 'FAIL - Disk check incomplete or errors remain'
+                $Script:HasFailure = $true
+            }
+            default {
+                Write-Status Fail "Both disk scan paths failed. chkdsk exit code: $($chk.ExitCode)"
+                $Script:Results['Disk'] = "FAIL - Repair-Volume and chkdsk failed ($($chk.ExitCode))"
+                $Script:HasFailure = $true
+            }
+        }
+    } finally {
+        $sw.Stop()
     }
-
+    if ($usedFallback) { Write-Status Info 'Fallback timing is included in the elapsed time.' }
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 }
 
@@ -1063,132 +1301,81 @@ function Invoke-DiskCheck {
 
 function Invoke-WindowsUpdateRepair {
     Write-StepHeader 'Repair Windows Update Components'
-    Write-Status Info 'This safely resets Windows Update components.'
-    Write-Status Info 'Update history and pending downloads are preserved.'
+    Write-Status Warn 'Use this only when Windows Update is actually stuck or failing.'
+    Write-Status Info 'Installed updates are preserved, but rebuilding SoftwareDistribution can reset the visible local update-history list.'
     Write-Host ''
 
-    # Don't reset while an update is mid-install - that CAN corrupt it.
     $pbr = Test-PendingReboot
     if ($pbr.Pending -and ($pbr.Reasons -contains 'Windows Update' -or $pbr.Reasons -contains 'Component Based Servicing')) {
-        Write-Host '  !! An update appears to be mid-install (reboot pending).' -ForegroundColor Yellow
-        Write-Host '  !! Resetting now could corrupt it. Reboot first, then re-run this.' -ForegroundColor Yellow
-        $goAnyway = Read-Host '  Continue anyway? (y/N)'
-        if ($goAnyway -ne 'y' -and $goAnyway -ne 'Y') {
-            Write-Status Skip 'Windows Update repair cancelled - reboot and retry.'
-            $Script:Results['WinUpdate'] = 'SKIP - Reboot pending'
-            return
-        }
+        Write-Status Warn 'An update appears to be mid-install and a reboot is pending.'
+        Write-Status Info 'Reboot first. Resetting update caches mid-install can damage servicing state.'
+        $Script:Results['WinUpdate'] = 'SKIP - Reboot pending'
+        return
+    }
+
+    $confirm = Read-Host '  Rebuild Windows Update caches now? (y/N)'
+    if ($confirm -notmatch '^[Yy]$') {
+        Write-Status Skip 'Windows Update repair cancelled.'
+        $Script:Results['WinUpdate'] = 'SKIP - Cancelled'
+        return
     }
 
     Enable-StayAwake
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $wuServices = @('wuauserv', 'cryptsvc', 'bits', 'msiserver', 'DoSvc', 'UsoSvc')
-
-    # Step 1: Stop services
-    Write-Status Step 'Stopping Windows Update related services...'
-    foreach ($svcName in $wuServices) {
-        $stopped = Stop-ServiceSafely $svcName
-        $status = if ($stopped) { 'OK' } else { 'Warn' }
-        Write-Status $status "Service $svcName stopped."
-    }
-    Write-Host ''
-
-    # Step 2: Rename (NOT delete) update database folders
-    Write-Status Step 'Renaming update database folders (safe reset)...'
-    $sdPath = "$env:SystemRoot\SoftwareDistribution"
-    $crPath = "$env:SystemRoot\System32\catroot2"
-
-    foreach ($folder in @($sdPath, $crPath)) {
-        $bakPath = "$folder.bak"
-        if (Test-Path $folder) {
-            # Remove old .bak if it exists
-            if (Test-Path $bakPath) {
-                Remove-Item $bakPath -Recurse -Force -EA SilentlyContinue
-            }
-            try {
-                Rename-Item $folder $bakPath -Force -ErrorAction Stop
-                Write-Status OK "Renamed $(Split-Path $folder -Leaf) to .bak"
-            } catch {
-                Write-Status Warn "Could not rename $(Split-Path $folder -Leaf) (may be locked)"
-            }
-        } else {
-            Write-Status Info "$(Split-Path $folder -Leaf) not found (already clean)."
-        }
-    }
-    Write-Host ''
-
-    # Step 3: Re-register critical Windows Update DLLs
-    Write-Status Step 'Re-registering Windows Update DLLs...'
-    $wuDlls = @(
-        'atl.dll', 'urlmon.dll', 'mshtml.dll', 'shdocvw.dll', 'browseui.dll',
-        'jscript.dll', 'vbscript.dll', 'scrrun.dll', 'msxml3.dll',
-        'actxprxy.dll', 'softpub.dll', 'wintrust.dll', 'dssenh.dll',
-        'rsaenh.dll', 'gpkcsp.dll', 'sccbase.dll', 'slbcsp.dll',
-        'cryptdlg.dll', 'oleaut32.dll', 'ole32.dll', 'shell32.dll',
-        'initpki.dll', 'wuapi.dll', 'wuaueng.dll', 'wuaueng1.dll',
-        'wucltui.dll', 'wups.dll', 'wups2.dll', 'wuweb.dll',
-        'qmgr.dll', 'qmgrprxy.dll', 'wucltux.dll', 'muweb.dll', 'wuwebv.dll'
-    )
-    $regCount = 0
-    $present = 0
-    foreach ($dll in $wuDlls) {
-        # SECURITY: register only the DLL at its absolute System32 path -
-        # regsvr32 with a bare name would search the current directory first.
-        $dllPath = Join-Path $Script:Sys32 $dll
-        if (-not (Test-Path -LiteralPath $dllPath)) { continue }   # not all exist on Win 10/11
-        $present++
-        $r = Invoke-Native-Quiet -FilePath 'regsvr32.exe' -ArgumentList '/s', $dllPath
-        if ($r.ExitCode -eq 0) { $regCount++ }
-    }
-    Write-Status OK "$regCount / $present DLLs re-registered ($($wuDlls.Count - $present) not present on this Windows version)."
-    Write-Host ''
-
-    # Step 4: Reset Winsock
-    Write-Status Step 'Resetting Winsock (network stack for WU)...'
-    $null = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'winsock', 'reset'
-    Write-Status OK 'Winsock reset.'
-
-    # Step 5: Start services
-    Write-Host ''
-    Write-Status Step 'Restarting services...'
-    foreach ($svcName in $wuServices) {
-        $started = Start-ServiceSafely $svcName
-        $status = if ($started) { 'OK' } else { 'Warn' }
-        Write-Status $status "Service $svcName started."
-    }
-    Write-Host ''
-
-    # Step 6: Trigger update detection
-    Write-Status Step 'Triggering Windows Update detection...'
-    $null = Invoke-Native-Quiet -FilePath 'wuauclt.exe' -ArgumentList '/resetauthorization', '/detectnow'
+    $services = @('bits','wuauserv','cryptsvc','DoSvc')
+    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $renamed = @()
     try {
-        $null = Invoke-Native-Quiet -FilePath 'UsoClient.exe' -ArgumentList 'StartScan'
-    } catch { }
-    Write-Status OK 'Windows Update detection triggered.'
+        Write-Status Step 'Stopping update services...'
+        foreach ($name in $services) {
+            try {
+                $svc = Get-Service -Name $name -EA SilentlyContinue
+                if ($svc -and $svc.Status -eq 'Running') {
+                    Stop-Service -Name $name -Force -EA Stop
+                    $svc.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(15))
+                }
+                Write-Status OK "$name ready."
+            } catch { Write-Status Warn "Could not fully stop ${name}: $($_.Exception.Message)" }
+        }
 
-    # Step 7: Clean up .bak folders (optional)
-    Write-Host ''
-    Write-Status Info 'Cleaning up backup folders...'
-    foreach ($folder in @($sdPath, $crPath)) {
-        $bakPath = "$folder.bak"
-        if (Test-Path $bakPath) {
-            Remove-Item $bakPath -Recurse -Force -EA SilentlyContinue
-            if (-not (Test-Path $bakPath)) {
-                Write-Status OK "$(Split-Path $folder -Leaf).bak removed."
-            } else {
-                Write-Status Info "$(Split-Path $folder -Leaf).bak still locked (will be cleaned on reboot)."
+        foreach ($folder in @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\System32\catroot2")) {
+            if (-not (Test-Path -LiteralPath $folder)) { continue }
+            $backup = "$folder.pcfixer.$stamp"
+            try {
+                Rename-Item -LiteralPath $folder -NewName (Split-Path -Leaf $backup) -EA Stop
+                $renamed += $backup
+                Write-Status OK "Rebuilt $(Split-Path -Leaf $folder); old cache retained as $(Split-Path -Leaf $backup)."
+            } catch {
+                Write-Status Warn "Could not rename $(Split-Path -Leaf $folder): $($_.Exception.Message)"
             }
         }
+
+        $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
+        Write-Status OK 'DNS cache refreshed; adapter DNS and DoH settings preserved.'
+    } finally {
+        Write-Status Step 'Starting update services...'
+        foreach ($name in @('cryptsvc','bits','wuauserv','DoSvc')) {
+            Start-Service -Name $name -EA SilentlyContinue
+            Write-Status OK "$name start requested."
+        }
+        Disable-StayAwake
+        $sw.Stop()
     }
 
-    $sw.Stop()
-    Disable-StayAwake
-    Write-Host ''
-    Write-Status OK 'Windows Update components have been reset.'
-    Write-Status Info 'Run Windows Update to check for and install updates.'
+    $uso = Resolve-SystemTool 'UsoClient.exe'
+    if ($uso) {
+        try { Start-Process -FilePath $uso -ArgumentList 'StartScan' -WindowStyle Hidden -EA SilentlyContinue | Out-Null; Write-Status OK 'Windows Update scan requested.' }
+        catch { Write-Status Info 'Open Settings > Windows Update and select Check for updates.' }
+    }
+    if ($renamed.Count -eq 0) {
+        Write-Status Warn 'No update cache folder was rebuilt. Review the log and run the read-only health check.'
+        $Script:Results['WinUpdate'] = 'WARN - Cache rebuild incomplete'
+    } else {
+        Write-Status OK 'Windows Update cache rebuild complete.'
+        $Script:Results['WinUpdate'] = 'PASS - Update caches rebuilt'
+    }
+    Write-Status Info 'Old cache folders are retained for manual recovery and can be deleted later after updates work normally.'
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
-
-    $Script:Results['WinUpdate'] = 'PASS - Components reset safely'
 }
 
 # ============================================================================
@@ -2461,7 +2648,7 @@ function Invoke-FullRepair {
         @{ Name = 'SFC - System File Check';        Func = 'sfc' },
         @{ Name = 'DISM - Component Store Repair';   Func = 'dism' },
         @{ Name = 'Cache Cleanup (Safe)';            Func = 'caches' },
-        @{ Name = 'Network Stack Reset';             Func = 'network' },
+        @{ Name = 'Network Health + DNS Refresh';      Func = 'networkhealth' },
         @{ Name = 'CHKDSK - Disk Health';            Func = 'chkdsk' }
     )
 
@@ -2486,7 +2673,7 @@ function Invoke-FullRepair {
                     'sfc'     { Invoke-SfcScan -Step $stepNum -Total $steps.Count }
                     'dism'    { Invoke-DismRepair -Step $stepNum -Total $steps.Count }
                     'caches'  { Invoke-CacheCleanup -Step $stepNum -Total $steps.Count }
-                    'network' { Invoke-NetworkReset -Step $stepNum -Total $steps.Count -SkipFirewall }
+                    'networkhealth' { Invoke-NetworkHealthRefresh -Step $stepNum -Total $steps.Count }
                     'chkdsk'  { Invoke-DiskCheck -Step $stepNum -Total $steps.Count }
                 }
             } catch {
@@ -2502,130 +2689,163 @@ function Invoke-FullRepair {
 }
 
 # ============================================================================
-#  REMOVE AI BLOAT — Windows Copilot, Recall, AI features
+#  AI FEATURE PRIVACY - reversible policy manager
 # ============================================================================
 
-function Invoke-AiCopilotRemoval {
-    param([int]$Step = 0, [int]$Total = 0)
+function Get-AiFeaturePolicyDefinitions {
+    @(
+        [pscustomobject]@{ Path='HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot'; Name='TurnOffWindowsCopilot'; Type='DWord'; Value=1; Label='Legacy Windows Copilot entry points' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name='AllowRecallEnablement'; Type='DWord'; Value=0; Label='Recall optional component availability' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name='DisableAIDataAnalysis'; Type='DWord'; Value=1; Label='Recall snapshot saving' },
+        [pscustomobject]@{ Path='HKCU:\Software\Policies\Microsoft\Windows\WindowsAI'; Name='DisableAIDataAnalysis'; Type='DWord'; Value=1; Label='Recall snapshot saving for current user' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name='DisableClickToDo'; Type='DWord'; Value=1; Label='Click to Do' },
+        [pscustomobject]@{ Path='HKCU:\Software\Policies\Microsoft\Windows\WindowsAI'; Name='DisableClickToDo'; Type='DWord'; Value=1; Label='Click to Do for current user' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name='DisableSettingsAgent'; Type='DWord'; Value=1; Label='Settings agentic search' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='CopilotPageContext'; Type='DWord'; Value=0; Label='Edge Copilot page context' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='EdgeEntraCopilotPageContext'; Type='DWord'; Value=0; Label='Edge Entra Copilot page/history context' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='BuiltInAIAPIsEnabled'; Type='DWord'; Value=0; Label='Edge built-in AI APIs' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='AIGenThemesEnabled'; Type='DWord'; Value=0; Label='Edge AI-generated themes' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge'; Name='GenAILocalFoundationalModelSettings'; Type='DWord'; Value=1; Label='Edge local GenAI model download' },
+        [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Google\Chrome'; Name='GenAILocalFoundationalModelSettings'; Type='DWord'; Value=1; Label='Chrome local GenAI model download' }
+    )
+}
 
-    if ($Total -gt 0) { Write-StepHeader 'Remove AI Bloat - Copilot, Recall, AI Features' $Step $Total }
-    else { Write-StepHeader 'Remove AI Bloat - Copilot, Recall, AI Features' }
-
-    Write-Status Info 'Disabling Windows Copilot, Recall, and AI bloat...'
-    Write-Status Warn 'Safe operation - only disables AI features, does not remove system files.'
-    Write-Host ''
-
-    $done = @()
-    $skipped = @()
-
-    # --- Copilot service ---
-    $copilotKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\CopilotSvc'
-    if (Test-Path $copilotKey) {
-        $cur = (Get-ItemProperty -Path $copilotKey -Name 'Start' -EA SilentlyContinue).Start
-        if ($cur -ne 4) {
-            Set-ItemProperty -Path $copilotKey -Name 'Start' -Value 4 -Type DWord -Force -EA SilentlyContinue
-            $done += 'CopilotSvc service disabled'
-        } else { $done += 'CopilotSvc already disabled' }
-        $svc = Get-Service -Name 'CopilotSvc' -EA SilentlyContinue
-        if ($svc -and $svc.Status -eq 'Running') {
-            Stop-Service -Name 'CopilotSvc' -Force -EA SilentlyContinue
-            $done += 'CopilotSvc stopped'
-        }
-    } else { $skipped += 'CopilotSvc not found (pre-23H2 build)' }
-
-    # --- Copilot scheduled tasks ---
-    try {
-        $copilotTasks = Get-ScheduledTask -TaskPath '\Microsoft\Windows\Windows Copilot\' -EA SilentlyContinue
-        foreach ($t in $copilotTasks) {
-            if ($t.State -ne 'Disabled') {
-                Disable-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -EA SilentlyContinue | Out-Null
-                $done += "Disabled Copilot task: $($t.TaskName)"
+function Get-AiRegistryEntryState {
+    param([Parameter(Mandatory)][string]$Path,[Parameter(Mandatory)][string]$Name)
+    $pathExists = Test-Path -LiteralPath $Path
+    $valueExists = $false
+    $value = $null
+    $kind = $null
+    if ($pathExists) {
+        try {
+            $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+            if (@($item.GetValueNames()) -contains $Name) {
+                $valueExists = $true
+                $value = $item.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $kind = $item.GetValueKind($Name).ToString()
             }
-        }
-    } catch { $skipped += 'No Copilot scheduled tasks found' }
-
-    # --- Windows Copilot policy ---
-    $copilotPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'
-    if (-not (Test-Path $copilotPol)) { New-Item -Path $copilotPol -Force | Out-Null }
-    Set-ItemProperty -Path $copilotPol -Name 'TurnOffWindowsCopilot' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    $copilotPolUser = 'HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot'
-    if (-not (Test-Path $copilotPolUser)) { New-Item -Path $copilotPolUser -Force | Out-Null }
-    Set-ItemProperty -Path $copilotPolUser -Name 'TurnOffWindowsCopilot' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'ShowCopilotButton' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    $done += 'Windows Copilot: DISABLED via policy'
-
-    # --- Recall / Windows AI (Win11 24H2+) ---
-    $recallPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'
-    if (-not (Test-Path $recallPol)) { New-Item -Path $recallPol -Force | Out-Null }
-    Set-ItemProperty -Path $recallPol -Name 'DisableAIDataAnalysis' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $recallPol -Name 'AllowRecallEnablement' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $recallPol -Name 'TurnOffWindowsAI' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    $recallPolUser = 'HKCU:\Software\Policies\Microsoft\Windows\WindowsAI'
-    if (-not (Test-Path $recallPolUser)) { New-Item -Path $recallPolUser -Force | Out-Null }
-    Set-ItemProperty -Path $recallPolUser -Name 'DisableAIDataAnalysis' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $recallPolUser -Name 'AllowRecallEnablement' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $recallPolUser -Name 'TurnOffWindowsAI' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    $done += 'Recall + Windows AI: DISABLED (screenshots, data analysis, Paint/Photos AI)'
-
-    # --- Edge Copilot ---
-    $edgeKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
-    if (-not (Test-Path $edgeKey)) { New-Item -Path $edgeKey -Force | Out-Null }
-    Set-ItemProperty -Path $edgeKey -Name 'CopilotPageContext' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $edgeKey -Name 'CopilotCDPPageContext' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $edgeKey -Name 'AIGenThemesEnabled' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $edgeKey -Name 'AskCopilotEnabled' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $edgeKey -Name 'HubsSidebarEnabled' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    $done += 'Edge Copilot sidebar, page context, AI themes: DISABLED'
-
-    # --- Chrome AI ---
-    $chromeKey = 'HKLM:\SOFTWARE\Policies\Google\Chrome'
-    if (-not (Test-Path $chromeKey)) { New-Item -Path $chromeKey -Force | Out-Null }
-    Set-ItemProperty -Path $chromeKey -Name 'GenAILocalFoundationalModelSettings' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    $done += 'Chrome AI/genAI features: BLOCKED'
-
-    # --- Cortana / Bing web search ---
-    $searchPol = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'
-    if (-not (Test-Path $searchPol)) { New-Item -Path $searchPol -Force | Out-Null }
-    Set-ItemProperty -Path $searchPol -Name 'AllowCortana' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $searchPol -Name 'DisableWebSearch' -Value 1 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $searchPol -Name 'ConnectedSearchUseWeb' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'BingSearchEnabled' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'CortanaConsent' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    $done += 'Cortana + Bing web search: DISABLED'
-
-    # --- AI-powered search ---
-    $searchSettingsKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\SearchSettings'
-    if (-not (Test-Path $searchSettingsKey)) { New-Item -Path $searchSettingsKey -Force | Out-Null }
-    Set-ItemProperty -Path $searchSettingsKey -Name 'IsAADCloudSearchEnabled' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    Set-ItemProperty -Path $searchSettingsKey -Name 'IsDeviceSearchHistoryEnabled' -Value 0 -Type DWord -Force -EA SilentlyContinue
-    $done += 'AI-powered cloud search: DISABLED'
-
-    # --- Remove Copilot AppX ---
-    $copilotApps = @(Get-AppxPackage -AllUsers -EA SilentlyContinue | Where-Object {
-        $_.Name -like '*Microsoft.Copilot*' -or $_.Name -like '*Microsoft.WindowsAi*'
-    })
-    if ($copilotApps.Count -gt 0) {
-        foreach ($app in $copilotApps) {
-            try {
-                Remove-AppxPackage -Package $app.PackageFullName -AllUsers -ErrorAction Stop
-                $done += "Removed Copilot/AI app: $($app.Name)"
-            } catch {
-                $skipped += "Could not remove $($app.Name) (may be system-protected)"
-            }
-        }
-    } else {
-        $skipped += 'No standalone Copilot/AI AppX packages found'
+        } catch {}
     }
+    [pscustomobject]@{Path=$Path;Name=$Name;PathExisted=[bool]$pathExists;ValueExisted=[bool]$valueExists;Value=$value;Kind=$kind}
+}
 
-    # --- Report ---
-    Write-Host ''
-    Write-Status Step 'Results:'
-    foreach ($d in $done) { Write-Status OK $d }
-    foreach ($s in $skipped) { Write-Status Skip $s }
-    Write-Host ''
+function New-AiFeatureSnapshot {
+    $snapshotRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\AIFeatureSnapshots'
+    if (-not (Test-Path -LiteralPath $snapshotRoot)) { New-Item -ItemType Directory -Path $snapshotRoot -Force | Out-Null }
+    $entries = foreach ($definition in Get-AiFeaturePolicyDefinitions) {
+        Get-AiRegistryEntryState -Path $definition.Path -Name $definition.Name
+    }
+    $snapshot = [ordered]@{
+        Schema = 1
+        Created = (Get-Date).ToString('o')
+        Computer = $env:COMPUTERNAME
+        User = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        Entries = @($entries)
+    }
+    $path = Join-Path $snapshotRoot ("ai_features_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
+    $snapshot | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $path -Encoding UTF8
+    return $path
+}
 
-    $Script:Results['AI Bloat'] = "$($done.Count) actions done, $($skipped.Count) skipped"
-    Write-Status OK 'AI bloat removal complete. Restart recommended for full effect.'
+function Get-LatestAiFeatureSnapshot {
+    $snapshotRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\AIFeatureSnapshots'
+    $file = Get-ChildItem -LiteralPath $snapshotRoot -Filter 'ai_features_*.json' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($file) { return $file.FullName }
+    return $null
+}
+
+function Restore-AiFeatureSnapshot {
+    param([string]$Path)
+    if (-not $Path) { $Path = Get-LatestAiFeatureSnapshot }
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+        Write-Status Warn 'No AI-feature snapshot exists.'
+        return $false
+    }
+    $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($entry in @($snapshot.Entries)) {
+        if ([bool]$entry.ValueExisted) {
+            if (-not (Test-Path -LiteralPath $entry.Path)) { New-Item -Path $entry.Path -Force | Out-Null }
+            $propertyType = switch ([string]$entry.Kind) {
+                'String'       { 'String' }
+                'ExpandString' { 'ExpandString' }
+                'MultiString'  { 'MultiString' }
+                'Binary'       { 'Binary' }
+                'QWord'        { 'QWord' }
+                default        { 'DWord' }
+            }
+            $restoreValue = switch ($propertyType) {
+                'Binary'      { [byte[]]@($entry.Value) }
+                'MultiString' { [string[]]@($entry.Value) }
+                'QWord'       { [uint64]$entry.Value }
+                'DWord'       { [uint32]$entry.Value }
+                default       { [string]$entry.Value }
+            }
+            New-ItemProperty -Path $entry.Path -Name $entry.Name -PropertyType $propertyType -Value $restoreValue -Force -ErrorAction Stop | Out-Null
+        } else {
+            Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($pathState in @($snapshot.Entries | Group-Object Path)) {
+        $first = $pathState.Group | Select-Object -First 1
+        if (-not [bool]$first.PathExisted -and (Test-Path -LiteralPath $first.Path)) {
+            try {
+                $item = Get-Item -LiteralPath $first.Path -ErrorAction Stop
+                if ($item.ValueCount -eq 0 -and $item.SubKeyCount -eq 0) { Remove-Item -LiteralPath $first.Path -Force -ErrorAction Stop }
+            } catch {}
+        }
+    }
+    Write-Status OK ("Exact AI-feature policy state restored from {0}" -f $Path)
+    $Script:Results['AI Features'] = 'Previous policy state restored'
+    return $true
+}
+
+function Set-AiFeaturePrivacyProfile {
+    $snapshotPath = New-AiFeatureSnapshot
+    Write-Status OK ("Exact registry snapshot saved: {0}" -f $snapshotPath)
+    try {
+        $changed = 0
+        foreach ($definition in Get-AiFeaturePolicyDefinitions) {
+            if (-not (Test-Path -LiteralPath $definition.Path)) { New-Item -Path $definition.Path -Force | Out-Null }
+            New-ItemProperty -Path $definition.Path -Name $definition.Name -PropertyType $definition.Type -Value $definition.Value -Force -ErrorAction Stop | Out-Null
+            $actual = Get-ItemPropertyValue -LiteralPath $definition.Path -Name $definition.Name -ErrorAction Stop
+            if ([int64]$actual -ne [int64]$definition.Value) { throw "Verification failed for $($definition.Path)\$($definition.Name)." }
+            Write-Status OK ("{0}: policy applied" -f $definition.Label)
+            $changed++
+        }
+        $Script:Results['AI Features'] = "$changed reversible policies applied"
+        Write-Status OK 'AI feature privacy profile applied. No services, apps, Search features, or system files were removed.'
+        Write-Status Info 'Restart Windows and reopen Edge/Chrome for every policy to take effect.'
+        return $true
+    } catch {
+        $applyError = $_.Exception.Message
+        Write-Status Fail ("AI policy application failed: {0}" -f $applyError)
+        Write-Status Info 'Rolling back the exact pre-change state...'
+        try { Restore-AiFeatureSnapshot -Path $snapshotPath | Out-Null } catch { Write-Status Fail ("Automatic rollback failed: {0}" -f $_.Exception.Message) }
+        $Script:HasFailure = $true
+        return $false
+    }
+}
+
+function Invoke-AiFeaturePrivacy {
+    Write-StepHeader 'AI Feature Privacy - Reversible Policy Manager'
+    Write-Status Info 'Uses documented Windows and browser policy values only.'
+    Write-Status Info 'It does not remove AppX packages, disable services, or alter Windows Search.'
+    Write-Host ''
+    Write-Host '  [1] Apply recommended AI privacy profile' -ForegroundColor White
+    Write-Host '  [2] Restore the most recent exact snapshot' -ForegroundColor White
+    Write-Host '  [0] Return' -ForegroundColor Gray
+    Write-Host ''
+    $choice = Read-Host '  Select [0-2]'
+    switch ($choice) {
+        '1' {
+            $confirm = Read-Host '  Apply reversible Copilot, Recall, Edge and Chrome AI policies? (y/N)'
+            if ($confirm -match '^[Yy]$') { Set-AiFeaturePrivacyProfile | Out-Null }
+            else { Write-Status Skip 'No changes made.' }
+        }
+        '2' { Restore-AiFeatureSnapshot | Out-Null }
+        default { Write-Status Skip 'No changes made.' }
+    }
 }
 
 # ============================================================================
@@ -2685,7 +2905,7 @@ function Show-Summary {
 
     # Check if restart is needed
     $pbr = Test-PendingReboot
-    if ($pbr.Pending -or $Script:Results.ContainsKey('SFC') -or $Script:Results.ContainsKey('Network') -or $Script:Results.ContainsKey('DeepClean')) {
+    if ($pbr.Pending -or $Script:Results.ContainsKey('SFC') -or $Script:Results.ContainsKey('DeepClean')) {
         Write-Host ''
         Write-Host '  ==> RESTART YOUR PC NOW for all changes to take effect.' -ForegroundColor Yellow
     }
@@ -2709,7 +2929,7 @@ function Main {
         switch ($sel) {
             '1'  { Invoke-FullRepair }
             '2'  { Invoke-SfcScan; Invoke-DismRepair }
-            '3'  { Invoke-CacheCleanup }
+            '3'  { $rb = Read-Host '  Also empty the Recycle Bin? (y/N)'; Invoke-CacheCleanup -IncludeRecycleBin:($rb -match '^[Yy]$') }
             '4'  { Invoke-NetworkReset }
             '5'  { Invoke-DeepCleanup }
             '6'  { Invoke-DiskCheck }
@@ -2729,7 +2949,7 @@ function Main {
             '20' { Export-HealthReport }
             '21' { Invoke-PerfCounterRepair }
             '22' { Invoke-OrphanServiceScan }
-            '23' { Invoke-AiCopilotRemoval }
+            '23' { Invoke-AiFeaturePrivacy }
             default {
                 Write-Host "`n  Invalid selection. Please enter 0-23." -ForegroundColor Red
                 Start-Sleep 1

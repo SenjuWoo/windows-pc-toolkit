@@ -1,5 +1,5 @@
 @echo off
-title PC Corruption Fixer v6.3
+title PC Corruption Fixer v7.1
 color 0B
 
 :: SECURITY: use the absolute path to powershell.exe so a rogue
