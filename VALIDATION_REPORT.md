@@ -2,7 +2,7 @@
 
 ## Result
 
-Static validation **passed** for Windows PC Toolkit **v2.0.0** (2026-07-25).
+Static validation **passed** for Windows PC Toolkit **v2.0.1** (2026-09-18).
 
 - PowerShell files checked: **29** (parser tokenization)
 - Batch launchers: absolute `System32\WindowsPowerShell\v1.0\powershell.exe` paths
@@ -14,6 +14,7 @@ Static validation **passed** for Windows PC Toolkit **v2.0.0** (2026-07-25).
 - `PC_Fixer.ps1` `${name}:` catch-string parse fix (7.1.1)
 - `Validate_All.ps1` path-resolver check on `Optimizer.Core.psm1`
 - Nested `_github_publish` exclusion no longer hides scripts when the clean repo is staged under that folder name
+- PC Corruption Fixer 7.1.2 deep-review pass (SFC exit-code mapping, w32tm re-register verification, orphan-service registry backup, `\\?\` device-path strip, TEMP-path warning regex)
 
 ## Runtime note
 

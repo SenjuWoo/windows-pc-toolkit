@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    PC Corruption Fixer v7.1 - Advanced system repair and diagnostics toolkit.
+    PC Corruption Fixer v7.1.2 - Advanced system repair and diagnostics toolkit.
 .DESCRIPTION
     Repairs corrupted system files, fixes Windows Update safely, clears caches,
     resets networking, deep-cleans components, checks disk health, manages
@@ -88,7 +88,7 @@ $ProgressPreference = 'SilentlyContinue'
 #  CONFIGURATION
 # ============================================================================
 
-$Script:Version    = '7.1.1'
+$Script:Version    = '7.1.2'
 $Script:LogDir     = "$env:USERPROFILE\Desktop"
 $Script:LogName    = "PC_Fixer_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 $Script:LogPath    = Join-Path $Script:LogDir $Script:LogName
@@ -826,6 +826,8 @@ function Invoke-CacheCleanup {
     # Temp files (single enumeration; -LiteralPath so files with [] in the
     # name don't get skipped by wildcard expansion)
     $tempPaths = @($env:TEMP, "$env:SystemRoot\Temp")
+    $totalTempFiles = 0
+    $totalTempRemoved = 0
     foreach ($tp in $tempPaths) {
         try {
             if (Test-Path -LiteralPath $tp) {
@@ -847,6 +849,8 @@ function Invoke-CacheCleanup {
                             Remove-Item -LiteralPath $_.FullName -Force -EA SilentlyContinue
                         }
                     }
+                $totalTempFiles += $files.Count
+                $totalTempRemoved += $removed
                 $freedMB = [math]::Round($freedBytes / 1MB, 1)
                 Write-Status OK "Temp files cleaned ($removed of $($files.Count) files, $freedMB MB freed) - $tp"
             }
@@ -896,7 +900,11 @@ function Invoke-CacheCleanup {
     # Deleting SoftwareDistribution\Download breaks in-progress updates
     # and can corrupt the WU database. Use [7] Repair Windows Update instead.
 
-    $Script:Results['Caches'] = 'PASS - Safe caches cleaned (Update data and Recycle Bin preserved unless requested)'
+    if ($totalTempFiles -gt 0 -and $totalTempRemoved -eq 0) {
+        $Script:Results['Caches'] = 'WARN - Temp files were in use; nothing could be removed'
+    } else {
+        $Script:Results['Caches'] = 'PASS - Safe caches cleaned (Update data and Recycle Bin preserved unless requested)'
+    }
 }
 
 # ============================================================================
@@ -2509,7 +2517,7 @@ function Invoke-OrphanServiceScan {
     Write-StepHeader 'Orphaned Service Cleanup'
     Write-Status Info 'Finds services whose program no longer exists on disk -'
     Write-Status Info 'dead registrations left behind by uninstalled software.'
-    Write-Status Info 'The scan itself changes nothing; removal is optional and asked per service.'
+    Write-Status Info 'The scan changes nothing; each removal is optional, confirmed, and backed up to ProgramData first.'
     Write-Host ''
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -2555,15 +2563,24 @@ function Invoke-OrphanServiceScan {
         $clean = Read-Host '  Remove them? You will be asked for each one separately (y/N)'
         $removed = 0
         if ($clean -eq 'y' -or $clean -eq 'Y') {
+            $backupDir = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\ServiceBackups'
+            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
             foreach ($o in $orphans) {
                 $ans = Read-Host "  Delete service '$($o.Name)' ($($o.Display))? (y/N)"
                 if ($ans -eq 'y' -or $ans -eq 'Y') {
+                    # Back up the service registration before deleting - sc delete has no undo.
+                    $backupFile = Join-Path $backupDir ("$($o.Name)_$(Get-Date -Format 'yyyyMMdd_HHmmss').reg")
+                    $exp = Invoke-Native-Quiet -FilePath 'reg.exe' -ArgumentList 'export', "HKLM\SYSTEM\CurrentControlSet\Services\$($o.Name)", $backupFile, '/y'
+                    if ($exp.ExitCode -ne 0) {
+                        Write-Status Fail "Registry backup failed for $($o.Name) - not deleting."
+                        continue
+                    }
                     $del = Invoke-Native-Quiet -FilePath 'sc.exe' -ArgumentList 'delete', $o.Name
                     if ($del.ExitCode -eq 0) {
-                        Write-Status OK "Removed $($o.Name)."
+                        Write-Status OK "Removed $($o.Name). Backup: $backupFile"
                         $removed++
                     } else {
-                        Write-Status Fail "Could not remove $($o.Name) (exit $($del.ExitCode))."
+                        Write-Status Fail "Could not remove $($o.Name) (exit $($del.ExitCode)). Backup kept: $backupFile"
                     }
                 } else {
                     Write-Status Skip "$($o.Name) kept."

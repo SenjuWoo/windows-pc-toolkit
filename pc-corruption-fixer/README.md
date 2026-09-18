@@ -1,4 +1,4 @@
-﻿# PC Corruption Fixer v7.1.1
+﻿# PC Corruption Fixer v7.1.2
 
 A Windows 10/11 repair and diagnostic toolkit built around official Windows tools, detailed logs, and conservative defaults.
 
@@ -8,6 +8,17 @@ A Windows 10/11 repair and diagnostic toolkit built around official Windows tool
 
 - Fixed a PowerShell parser failure from an unbraced variable followed by a colon in a catch message (${name}:).
 
+### Fixes 7.1.2 (deep-review pass)
+
+- SFC exit codes are mapped correctly (1 = repaired, 2 = could not run). Previously a scan that could not run was reported as "repaired", and a successful repair was reported as a failure.
+- Post-DISM verification accepts a repaired scan and keeps the sleep block held during the verification pass.
+- Store re-register counts real successes and reports failures instead of a fixed PASS.
+- Time-sync repair verifies `w32tm /register` and reports a missing W32Time service instead of claiming success.
+- Orphan-service removal exports a registry backup before `sc delete` and refuses to delete when the backup fails.
+- Startup-Viewer TEMP-path warning and `\\?\` device-path handling fixed (both regexes could never match).
+- AI privacy snapshots abort cleanly on failure; partial restores are reported as partial.
+- Restore-point, DISM CheckHealth, component-cleanup and event-scan messages no longer overclaim.
+- Six unused display helpers removed.
 
 ### Disk scan failure fixed
 
