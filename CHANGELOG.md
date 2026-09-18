@@ -1,5 +1,24 @@
 # Changelog
 
+## Toolkit v2.1.0 (2026-09-18)
+
+New tool: **PC Cleaner 1.0.0** — scan-first disk cleanup + registry care.
+
+### PC Cleaner 1.0.0
+
+- Scan-first UX: every category shows size, file count, risk tag, and a plain-English description before anything is deleted.
+- One protected-path guard (`Assert-NotProtected`) blocks cookies, logins, history, bookmarks, sessions, app storage (IndexedDB/Local Storage), editor history, Extensions, and user folders (Desktop/Documents/Pictures/Videos/Music/OneDrive) in every delete path.
+- Balanced profile (safe caches) + Strict profile (Windows Update cache, Prefetch, PWA caches, Recall snapshots, Windows.old).
+- AI model stores (LM Studio/Ollama/Hugging Face/torch/whisper) are report-only with sizes — never deleted.
+- `.bak`/`.old`/`.tmp`/`.orig` leftovers are removed only when a sibling original still exists; orphans are kept and reported.
+- Registry Care: orphaned uninstall entries, dead Run/RunOnce values, stale App Paths, stale MuiCache entries, dead Startup shortcuts —每个 removal exports a `.reg` backup with a one-key restore (menu 7).
+- `-Action SelfTest` asserts the guard and the backup-file rule; `-Action Scan` is a non-interactive read-only scan.
+
+### Repository
+
+- `Validate_All.ps1`: PC Cleaner checks added (protected-data markers; delete patterns for protected names are rejected).
+- `START_TOOLKIT.bat`: PC Cleaner added to the menu.
+
 ## Toolkit v2.0.1 (2026-09-18)
 
 PC Corruption Fixer **7.1.2** correctness pass after a full source review. Privacy Guard, Encrypted DNS and Gaming Optimizer are unchanged.

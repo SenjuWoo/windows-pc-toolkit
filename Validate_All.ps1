@@ -84,6 +84,19 @@ foreach($required in @('AIFeatureSnapshots','DisableAIDataAnalysis','GenAILocalF
     if($fixerText -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing reversible AI privacy marker: $required" -ForegroundColor Red}
 }
 
+Write-Host "`nChecking PC Cleaner safety..." -ForegroundColor Cyan
+$cleanerPath=if(Test-Path -LiteralPath (Join-Path $root 'Pc Cleaner\PC_Cleaner.ps1')){Join-Path $root 'Pc Cleaner\PC_Cleaner.ps1'}else{Join-Path $root 'pc-cleaner\PC_Cleaner.ps1'}
+if(-not(Test-Path -LiteralPath $cleanerPath)){$failed=$true;Write-Host '[FAIL] PC Cleaner script not found.' -ForegroundColor Red}
+else{
+    $cleanerText=Get-Content -LiteralPath $cleanerPath -Raw
+    foreach($required in @('Assert-NotProtected','RegistryBackups','Get-BakCandidates','Invoke-SelfTest','optimization_guide_model_store','CoreAIPlatform')){
+        if($cleanerText -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] PC Cleaner missing protected-data marker: $required" -ForegroundColor Red}
+    }
+    foreach($forbidden in @('Remove-Item[^\r\n]*(Cookies|Login Data|Bookmarks|Web Data)','Remove-ItemProperty[^\r\n]*History')){
+        if($cleanerText -match $forbidden){$failed=$true;Write-Host "[FAIL] PC Cleaner delete pattern targets protected user data: $forbidden" -ForegroundColor Red}
+    }
+}
+
 Write-Host "`nChecking DNS launcher semantics..." -ForegroundColor Cyan
 $dnsFolder=Split-Path -Parent $dnsManager
 $dhcpLauncher=Join-Path $dnsFolder 'DNS_Revert_DHCP.ps1'
