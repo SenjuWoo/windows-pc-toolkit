@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-    PC Cleaner v1.0.0 - scan-first disk cleanup and registry care for Windows 10/11.
+    PC Cleaner v1.0.1 - scan-first disk cleanup and registry care for Windows 10/11.
 .DESCRIPTION
     Every category is labeled with what it is and why it is safe. Nothing is
     deleted without an explicit profile/pick and a confirmation. User data -
@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Script:Version = '1.0.0'
+$Script:Version = '1.0.1'
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
 $RegBackupRoot  = Join-Path $StateRoot 'RegistryBackups'
@@ -435,7 +435,7 @@ function Get-RegistryIssues {
                 $props = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction Stop
                 if ($props.SystemComponent -eq 1) { continue }   # system-managed (KB entries etc.)
                 $target = Get-CommandTargetPath ([string]$props.UninstallString)
-                if ($target -and -not (Test-Path -LiteralPath $target)) {
+                if ($target -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                     [void]$issues.Add([pscustomobject]@{
                         Category = 'Orphaned uninstall entries'; Kind = 'Key'
                         Key = $k.PSPath; Name = $k.PSChildName
@@ -458,7 +458,7 @@ function Get-RegistryIssues {
             foreach ($prop in $props.PSObject.Properties) {
                 if ($prop.Name -match '^PS') { continue }
                 $target = Get-CommandTargetPath ([string]$prop.Value)
-                if ($target -and -not (Test-Path -LiteralPath $target)) {
+                if ($target -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                     [void]$issues.Add([pscustomobject]@{
                         Category = 'Dead startup entries'; Kind = 'Value'
                         Key = $key; Name = $prop.Name
@@ -478,7 +478,7 @@ function Get-RegistryIssues {
             try {
                 $target = [string](Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction Stop).'(default)'
                 $target = [Environment]::ExpandEnvironmentVariables($target.Trim('"'))
-                if ($target -and [IO.Path]::IsPathRooted($target) -and -not (Test-Path -LiteralPath $target)) {
+                if ($target -and [IO.Path]::IsPathRooted($target) -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                     [void]$issues.Add([pscustomobject]@{
                         Category = 'Stale App Paths'; Kind = 'Key'
                         Key = $k.PSPath; Name = $k.PSChildName
@@ -498,7 +498,7 @@ function Get-RegistryIssues {
             $pathPart = $prop.Name -replace '\.(FriendlyAppName|ApplicationCompany|NoRemove)$', ''
             if ($pathPart -notmatch '\\') { continue }
             $pathPart = [Environment]::ExpandEnvironmentVariables($pathPart)
-            if ([IO.Path]::IsPathRooted($pathPart) -and -not (Test-Path -LiteralPath $pathPart)) {
+            if ([IO.Path]::IsPathRooted($pathPart) -and -not (Test-Path -LiteralPath $pathPart -ErrorAction SilentlyContinue)) {
                 [void]$issues.Add([pscustomobject]@{
                     Category = 'Stale MuiCache entries'; Kind = 'Value'
                     Key = $mui; Name = $prop.Name
@@ -516,7 +516,7 @@ function Get-RegistryIssues {
             foreach ($lnk in @(Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
                 try {
                     $target = [Environment]::ExpandEnvironmentVariables($sh.CreateShortcut($lnk.FullName).TargetPath)
-                    if ($target -and [IO.Path]::IsPathRooted($target) -and -not (Test-Path -LiteralPath $target)) {
+                    if ($target -and [IO.Path]::IsPathRooted($target) -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                         [void]$issues.Add([pscustomobject]@{
                             Category = 'Dead startup shortcuts'; Kind = 'File'
                             Key = $lnk.FullName; Name = $lnk.Name
@@ -639,7 +639,7 @@ function Restore-LatestRegistryBackup {
         if ($item.Type -eq 'File') {
             try {
                 $dest = Split-Path $item.Path -Parent
-                if (-not (Test-Path -LiteralPath $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+                if (-not (Test-Path -LiteralPath $dest -ErrorAction SilentlyContinue)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
                 Copy-Item -LiteralPath $item.Backup -Destination $item.Path -Force -ErrorAction Stop
                 Write-Status OK "Restored file: $(Split-Path $item.Path -Leaf)"
                 $restored++

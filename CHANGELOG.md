@@ -1,5 +1,12 @@
 # Changelog
 
+## Toolkit v2.1.1 (2026-09-18)
+
+### PC Cleaner 1.0.1
+
+- Registry scanning: every `Test-Path` check on registry-derived paths now tolerates access-denied locations (`-ErrorAction SilentlyContinue`), so one protected path can no longer abort the rest of a category scan (notably MuiCache).
+- Same fix applied to the registry-restore directory check.
+
 ## Toolkit v2.1.0 (2026-09-18)
 
 New tool: **PC Cleaner 1.0.0** — scan-first disk cleanup + registry care.

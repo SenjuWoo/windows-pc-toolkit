@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml"><img src="https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5b8a9a?labelColor=0e1418" alt="MIT License"></a>
-  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.1.0"><img src="https://img.shields.io/badge/release-v2.1.0-7a9aaa?labelColor=0e1418" alt="v2.1.0"></a>
+  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.1.1"><img src="https://img.shields.io/badge/release-v2.1.1-7a9aaa?labelColor=0e1418" alt="v2.1.1"></a>
 </p>
 
 <p align="center">
@@ -37,7 +37,7 @@ This git tree has no application screenshot. The UI is `START_TOOLKIT.bat` and e
 | [`pc-privacy-guard/`](pc-privacy-guard/) | **2.0** | Balanced or Strict privacy profiles with exact undo |
 | [`dns-encrypted-doh/`](dns-encrypted-doh/) | **2.1** | One-provider-at-a-time Windows DNS-over-HTTPS manager |
 | [`pc-gaming-optimizer/`](pc-gaming-optimizer/) | **4.0** | Diagnostics + reversible supported gaming settings (no tweak pile) |
-| [`pc-cleaner/`](pc-cleaner/) | **1.0.0** | Scan-first disk cleanup + registry care; never deletes user data |
+| [`pc-cleaner/`](pc-cleaner/) | **1.0.1** | Scan-first disk cleanup + registry care; never deletes user data |
 
 ## Why this rewrite exists
 
@@ -56,7 +56,7 @@ Earlier releases could "fix" things that made systems worse: Full Repair also re
 
 ## Quick start
 
-1. Download a [release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.1.0) or clone this repo.
+1. Download a [release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.1.1) or clone this repo.
 2. Double-click **`START_TOOLKIT.bat`** for the launcher menu, **or** open a tool folder and run its `.bat`.
 3. Accept UAC.
 4. Prefer safe defaults; read each tool's README before Strict mode or network reset.
@@ -107,7 +107,7 @@ Uses Microsoft's PowerShell parser on every script, checks launcher paths and Do
 
 Verified in this tree:
 
-- latest GitHub release **v2.1.0**
+- latest GitHub release **v2.1.1**
 - [`VALIDATION_REPORT.md`](VALIDATION_REPORT.md) — static validation **passed** (2026-09-18): 31 PowerShell files parsed, absolute launcher paths, official HTTPS DoH templates, Quad9 secure IPv4/IPv6, no UDP fallback, safety-regression checks
 - CI (`.github/workflows/ci.yml`) — PowerShell parse + PSScriptAnalyzer, JSON, Python compile
 

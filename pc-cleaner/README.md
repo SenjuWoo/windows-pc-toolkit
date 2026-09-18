@@ -1,4 +1,4 @@
-# PC Cleaner v1.0.0
+# PC Cleaner v1.0.1
 
 Scan-first disk cleanup and registry care for Windows 10/11. Built to beat CCleaner (adware), BleachBit (unclear labels, no registry cleaner) and Razer Cortex (bloat) at their own game — while never touching user data.
 
