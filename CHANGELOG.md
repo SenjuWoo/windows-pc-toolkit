@@ -1,5 +1,13 @@
 # Changelog
 
+## Toolkit v2.1.2 (2026-09-18)
+
+### PC Cleaner 1.0.2
+
+- Launcher rewritten to the Corruption Fixer's proven self-elevation pattern (`net session` check -> relaunch elevated -> run the script in the same window). The nested `-ArgumentList` quoting unique to this launcher (and absent from every other suite launcher) is gone.
+- The launcher logs to `%LOCALAPPDATA%\Temp\PCCleaner_launch.log` and pauses with the exit code on failure, so a startup failure is never invisible again.
+- `Validate_All.ps1`: bat launchers must not contain backslash-escaped quotes (`\"`).
+
 ## Toolkit v2.1.1 (2026-09-18)
 
 ### PC Cleaner 1.0.1

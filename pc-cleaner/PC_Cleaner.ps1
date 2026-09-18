@@ -1,7 +1,7 @@
 #requires -version 5.1
 <#
 .SYNOPSIS
-    PC Cleaner v1.0.1 - scan-first disk cleanup and registry care for Windows 10/11.
+    PC Cleaner v1.0.2 - scan-first disk cleanup and registry care for Windows 10/11.
 .DESCRIPTION
     Every category is labeled with what it is and why it is safe. Nothing is
     deleted without an explicit profile/pick and a confirmation. User data -
@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Script:Version = '1.0.1'
+$Script:Version = '1.0.2'
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
 $RegBackupRoot  = Join-Path $StateRoot 'RegistryBackups'

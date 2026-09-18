@@ -1,4 +1,4 @@
-# PC Cleaner v1.0.1
+# PC Cleaner v1.0.2
 
 Scan-first disk cleanup and registry care for Windows 10/11. Built to beat CCleaner (adware), BleachBit (unclear labels, no registry cleaner) and Razer Cortex (bloat) at their own game — while never touching user data.
 
@@ -42,7 +42,7 @@ Registry Care menu: orphaned uninstall entries, dead Run/RunOnce values, stale A
 
 ## Launch
 
-Double-click `Run_As_Admin.bat`, accept UAC, start with **[1] Scan**.
+Double-click `Run_As_Admin.bat`, accept UAC, start with **[1] Scan**. If it ever fails to start, the launcher writes the reason to `%LOCALAPPDATA%\Temp\PCCleaner_launch.log` and keeps the window open.
 
 ## Files
 
