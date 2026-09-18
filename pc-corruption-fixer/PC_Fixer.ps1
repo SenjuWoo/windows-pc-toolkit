@@ -151,31 +151,6 @@ public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
     }
 } catch { $Script:Ansi = $false }
 
-function Write-Gradient {
-    # Prints one line of text with a smooth left-to-right RGB gradient.
-    param(
-        [string]$Text,
-        [int[]]$From = @(0, 210, 255),    # cyan
-        [int[]]$To   = @(170, 90, 255),   # violet
-        [string]$Fallback = 'Cyan'
-    )
-    if (-not $Script:Ansi -or [string]::IsNullOrEmpty($Text)) {
-        Write-Host $Text -ForegroundColor $Fallback
-        return
-    }
-    $len = $Text.Length
-    $sb = New-Object System.Text.StringBuilder
-    for ($i = 0; $i -lt $len; $i++) {
-        $t = if ($len -gt 1) { $i / ($len - 1) } else { 0.0 }
-        $r = [int]($From[0] + ($To[0] - $From[0]) * $t)
-        $g = [int]($From[1] + ($To[1] - $From[1]) * $t)
-        $bl = [int]($From[2] + ($To[2] - $From[2]) * $t)
-        [void]$sb.Append("$Script:Esc[38;2;$r;$g;${bl}m").Append($Text[$i])
-    }
-    [void]$sb.Append("$Script:Esc[0m")
-    Write-Host $sb.ToString()
-}
-
 function Get-UsageBar {
     # Returns a mini bar like [######......] for dashboard rows.
     param([double]$Percent, [int]$Width = 20)
@@ -383,17 +358,6 @@ function Invoke-NativeProcessSafe {
     } finally { $process.Dispose() }
 }
 
-function Stop-ServiceSafely {
-    param([string]$Name)
-    try {
-        $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
-        if ($svc -and $svc.Status -eq 'Running') {
-            Stop-Service -Name $Name -Force -ErrorAction Stop
-        }
-        return $true
-    } catch { return $false }
-}
-
 function Start-ServiceSafely {
     param([string]$Name)
     try {
@@ -435,29 +399,6 @@ function Test-PendingReboot {
 #  DISPLAY FUNCTIONS
 # ============================================================================
 
-function Write-Box {
-    param([string]$Text, [string]$Color = 'Cyan', [int]$Width = 64)
-    $inner = $Width - 2
-    Write-Host "  $($B.TL)$($B.H * $inner)$($B.TR)" -ForegroundColor $Color
-    Write-Host "  $($B.V)" -ForegroundColor $Color -NoNewline
-    Write-Host (" $Text".PadRight($inner)) -NoNewline
-    Write-Host "$($B.V)" -ForegroundColor $Color
-    Write-Host "  $($B.BL)$($B.H * $inner)$($B.BR)" -ForegroundColor $Color
-}
-
-function Write-DoubleBox {
-    param([string]$Line1, [string]$Line2, [string]$Color = 'Cyan', [int]$Width = 64)
-    $inner = $Width - 2
-    Write-Host "  $($B.TL)$($B.H * $inner)$($B.TR)" -ForegroundColor $Color
-    Write-Host "  $($B.V)" -ForegroundColor $Color -NoNewline
-    Write-Host (" $Line1".PadRight($inner)) -NoNewline
-    Write-Host "$($B.V)" -ForegroundColor $Color
-    Write-Host "  $($B.V)" -ForegroundColor $Color -NoNewline
-    Write-Host (" $Line2".PadRight($inner)) -NoNewline
-    Write-Host "$($B.V)" -ForegroundColor $Color
-    Write-Host "  $($B.BL)$($B.H * $inner)$($B.BR)" -ForegroundColor $Color
-}
-
 function Write-Section {
     param([string]$Title)
     Write-Host ''
@@ -498,23 +439,6 @@ function Write-StepHeader {
     Write-Host "  $prefix$Title" -ForegroundColor Yellow
     Write-Host ("  " + $B.H * 62) -ForegroundColor DarkCyan
     Write-Host ''
-}
-
-function Write-ProgressBar {
-    param([int]$Current, [int]$Total, [int]$Width = 30)
-    if ($Total -eq 0) { return }
-    $pct = [math]::Min([math]::Round(($Current / $Total) * 100), 100)
-    $filled = [math]::Round($Current / $Total * $Width)
-    $empty = $Width - $filled
-    $bar = ($B.Fill * $filled) + ($B.Empty * $empty)
-    Write-Host ''
-    Write-Host "  Overall Progress: [$bar] $pct%  ($Current/$Total)" -ForegroundColor Cyan
-}
-
-function Write-Result {
-    param([string]$Name, [string]$Value, [switch]$Failed, [switch]$Warning)
-    $color = if ($Failed) { 'Red' } elseif ($Warning) { 'Yellow' } else { 'Green' }
-    Write-Host ("  {0,-18} {1}" -f "[$Name]", $Value) -ForegroundColor $color
 }
 
 # ============================================================================
@@ -788,9 +712,13 @@ function Invoke-SfcScan {
     if ($result.ExitCode -eq 0) {
         Write-Status OK 'SFC completed - no integrity violations found.'
         $Script:Results['SFC'] = 'PASS - No violations'
-    } elseif ($result.ExitCode -eq 2) {
+    } elseif ($result.ExitCode -eq 1) {
         Write-Status OK 'SFC found and repaired corrupted files.'
         $Script:Results['SFC'] = 'PASS - Corruptions repaired'
+    } elseif ($result.ExitCode -eq 2) {
+        Write-Status Warn 'SFC could not perform the requested operation - the scan did not complete.'
+        $Script:Results['SFC'] = 'WARN - SFC could not run'
+        $Script:HasFailure = $true
     } elseif ($result.ExitCode -eq 3) {
         Write-Status Fail 'SFC found errors but could NOT fix all of them.'
         $Script:Results['SFC'] = 'WARN - Some files could not be repaired'
@@ -858,8 +786,10 @@ function Invoke-DismRepair {
         if ($dismResult.ExitCode -eq 0) {
             Write-Host ''
             Write-Status Info 'Re-running SFC to verify DISM repairs...'
+            if ($Total -eq 0) { Enable-StayAwake }  # standalone run: keep sleep blocked across the verification scan too
             $sfcCheck = Invoke-Native -FilePath 'sfc.exe' -ArgumentList '/scannow'
-            if ($sfcCheck.ExitCode -eq 0 -or $sfcCheck.ExitCode -eq 2) {
+            if ($Total -eq 0) { Disable-StayAwake }
+            if ($sfcCheck.ExitCode -eq 0 -or $sfcCheck.ExitCode -eq 1) {
                 Write-Status OK 'Post-DISM SFC verification passed.'
                 $Script:Results['Post-SFC'] = 'PASS'
             } else {
@@ -995,7 +925,8 @@ function Backup-NetworkDnsState {
     try {
         $stateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\NetworkSnapshots'
         if (-not (Test-Path -LiteralPath $stateRoot)) { New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null }
-        $adapters = foreach ($adapter in Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -notmatch 'Loopback' }) {
+        # Snapshot every adapter, not just ones currently Up - a TCP/IP reset at reboot also affects disconnected adapters.
+        $adapters = foreach ($adapter in Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.Name -notmatch 'Loopback' }) {
             $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -EA SilentlyContinue
             $static = Get-StaticNetworkDnsServers -Adapter $adapter
             [PSCustomObject]@{
@@ -1223,7 +1154,11 @@ function Invoke-DeepCleanup {
     $sw.Stop()
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 
-    $Script:Results['DeepClean'] = 'PASS - Component store cleaned'
+    if ($clean1.ExitCode -eq 0) {
+        $Script:Results['DeepClean'] = 'PASS - Component store cleaned'
+    } else {
+        $Script:Results['DeepClean'] = 'WARN - Component cleanup incomplete'
+    }
 }
 
 # ============================================================================
@@ -1389,10 +1324,10 @@ function Invoke-CreateRestorePoint {
 
     # Enable System Restore if disabled
     try {
-        Enable-ComputerRestore -Drive 'C:\' -EA SilentlyContinue
+        Enable-ComputerRestore -Drive 'C:\' -EA Stop
         Write-Status OK 'System Restore enabled on C:.'
     } catch {
-        Write-Status Warn 'Could not verify System Restore enablement.'
+        Write-Status Warn ("Could not enable System Restore (it may be disabled by policy): {0}" -f $_.Exception.Message)
     }
 
     Write-Status Info 'Creating restore point (this may take a moment)...'
@@ -1527,20 +1462,21 @@ function Invoke-StoreReset {
     # Re-register AppX packages
     Write-Host ''
     Write-Status Info 'Re-registering AppX packages (this may take a few minutes)...'
+    $count = 0
+    $errors = 0
     try {
         $appxPackages = Get-AppxPackage -AllUsers -EA SilentlyContinue
-        $count = 0
-        $errors = 0
         foreach ($pkg in $appxPackages) {
             try {
                 $manifestPath = Join-Path $pkg.InstallLocation 'AppxManifest.xml'
                 if (Test-Path $manifestPath) {
-                    Add-AppxPackage -DisableDevelopmentMode -Register $manifestPath -EA SilentlyContinue | Out-Null
+                    Add-AppxPackage -DisableDevelopmentMode -Register $manifestPath -EA Stop | Out-Null
                     $count++
                 }
             } catch { $errors++ }
         }
-        Write-Status OK "Re-registered $count AppX packages ($errors errors)."
+        if ($errors -gt 0) { Write-Status Warn "Re-registered $count AppX packages ($errors failed)." }
+        else { Write-Status OK "Re-registered $count AppX packages." }
     } catch {
         Write-Status Fail 'Could not enumerate AppX packages.'
     }
@@ -1548,7 +1484,9 @@ function Invoke-StoreReset {
     $sw.Stop()
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 
-    $Script:Results['Store'] = 'PASS - Store apps re-registered'
+    if ($count -gt 0 -and $errors -eq 0) { $Script:Results['Store'] = 'PASS - Store apps re-registered' }
+    elseif ($count -gt 0) { $Script:Results['Store'] = "WARN - $count re-registered, $errors failed" }
+    else { $Script:Results['Store'] = 'WARN - No AppX packages re-registered' }
 }
 
 # ============================================================================
@@ -1632,7 +1570,7 @@ function Invoke-EventLogScan {
     }
 
     Write-Host ''
-    Write-Status Info "Summary: $totalCritical critical, $totalErrors errors in last 72 hours."
+    Write-Status Info "Summary (last 72 hours, newest 20 events per log): $totalCritical critical, $totalErrors errors."
 
     $sw.Stop()
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
@@ -1663,8 +1601,11 @@ function Invoke-QuickHealthScan {
     $sfcResult = Invoke-Native-Quiet -FilePath 'sfc.exe' -ArgumentList '/verifyonly'
     if ($sfcResult.ExitCode -eq 0) {
         Write-Status OK 'System file integrity OK.'
-    } elseif ($sfcResult.ExitCode -eq 2 -or $sfcResult.ExitCode -eq 3) {
+    } elseif ($sfcResult.ExitCode -eq 3) {
         Write-Status Warn 'Integrity violations detected. Run SFC repair [2] to fix.'
+        $issues++
+    } elseif ($sfcResult.ExitCode -eq 2) {
+        Write-Status Warn 'SFC could not complete the integrity check.'
         $issues++
     } else {
         Write-Status Info "SFC verify returned code $($sfcResult.ExitCode)."
@@ -1675,7 +1616,7 @@ function Invoke-QuickHealthScan {
     Write-Status Step 'Checking component store health...'
     $dismResult = Invoke-Native-Quiet -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/CheckHealth'
     if ($dismResult.Output -match 'No component store corruption detected') {
-        Write-Status OK 'Component store is healthy.'
+        Write-Status OK 'No component store corruption on record (CheckHealth reflects prior scans).'
     } elseif ($dismResult.Output -match 'repairable|corruption detected') {
         Write-Status Warn 'Component store has repairable corruption. Run DISM repair [2].'
         $issues++
@@ -2081,17 +2022,23 @@ function Invoke-TimeSyncRepair {
     } else {
         Write-Status Warn 'Resync failed. Re-registering the time service...'
         $null = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/unregister'
-        $null = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/register'
-        [void](Start-ServiceSafely 'W32Time')
-        Start-Sleep -Seconds 2
-        $r2 = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/resync', '/force'
-        if ($r2.ExitCode -eq 0) {
-            Write-Status OK 'Time service re-registered and resynced.'
-            $Script:Results['TimeSync'] = 'PASS - Re-registered + resynced'
-        } else {
-            Write-Status Fail 'Time sync still failing. Check internet and the BIOS clock/battery.'
-            $Script:Results['TimeSync'] = 'FAIL - Resync failed'
+        $reg = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/register'
+        if ($reg.ExitCode -ne 0) {
+            Write-Status Fail "Time service re-registration failed (exit code $($reg.ExitCode)). W32Time may be missing - run 'w32tm /register' manually as Administrator."
+            $Script:Results['TimeSync'] = 'FAIL - Re-register failed'
             $Script:HasFailure = $true
+        } else {
+            [void](Start-ServiceSafely 'W32Time')
+            Start-Sleep -Seconds 2
+            $r2 = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/resync', '/force'
+            if ($r2.ExitCode -eq 0) {
+                Write-Status OK 'Time service re-registered and resynced.'
+                $Script:Results['TimeSync'] = 'PASS - Re-registered + resynced'
+            } else {
+                Write-Status Fail 'Time sync still failing. Check internet and the BIOS clock/battery.'
+                $Script:Results['TimeSync'] = 'FAIL - Resync failed'
+                $Script:HasFailure = $true
+            }
         }
     }
 
@@ -2213,8 +2160,7 @@ function Invoke-DiskSpaceAnalyzer {
         @{ Label = 'Error reports (WER)';       Path = "$env:ProgramData\Microsoft\Windows\WER" },
         @{ Label = 'Previous Windows install';  Path = "$env:SystemDrive\Windows.old" },
         @{ Label = 'Recycle Bin';               Path = "$env:SystemDrive\`$Recycle.Bin" },
-        @{ Label = 'Downloads folder';          Path = "$env:USERPROFILE\Downloads" },
-        @{ Label = 'Component store (WinSxS)*'; Path = "$env:SystemRoot\WinSxS" }
+        @{ Label = 'Downloads folder';          Path = "$env:USERPROFILE\Downloads" }
     )
     $rows = @()
     foreach ($t in $targets) {
@@ -2237,7 +2183,7 @@ function Invoke-DiskSpaceAnalyzer {
     }
 
     Write-Host ''
-    Write-Status Info '* WinSxS uses hardlinks; its true disk cost is smaller than shown.'
+    Write-Status Info 'WinSxS is skipped here (huge walk; hardlink sizes are misleading). Use the DISM Deep Clean option for the official component-store report.'
     Write-Status Info 'hiberfil.sys: remove with "powercfg /h off" (disables hibernate + fast startup).'
     Write-Status Info 'Windows.old: removed via Disk Cleanup > Previous Windows installation(s).'
     Write-Status Info 'Temp/WU/DO caches: option [3] Clear All Caches cleans the safe ones.'
@@ -2548,7 +2494,7 @@ function Get-ServiceExePath {
     # Handles: "quoted path" args | unquoted C:\path with spaces\svc.exe args
     param([string]$PathName)
     if ([string]::IsNullOrWhiteSpace($PathName)) { return $null }
-    $p = $PathName.Trim() -replace '^\\\?\?\\', ''
+    $p = $PathName.Trim() -replace '^\\\\\?\\|^\\\?\?\\', ''
     if ($p.StartsWith('"')) {
         $end = $p.IndexOf('"', 1)
         if ($end -gt 1) { return $p.Substring(1, $end - 1) }
@@ -2649,7 +2595,7 @@ function Invoke-FullRepair {
         @{ Name = 'DISM - Component Store Repair';   Func = 'dism' },
         @{ Name = 'Cache Cleanup (Safe)';            Func = 'caches' },
         @{ Name = 'Network Health + DNS Refresh';      Func = 'networkhealth' },
-        @{ Name = 'CHKDSK - Disk Health';            Func = 'chkdsk' }
+        @{ Name = 'Disk Health - Online Scan';       Func = 'chkdsk' }
     )
 
     # Offer restore point first
@@ -2763,6 +2709,7 @@ function Restore-AiFeatureSnapshot {
         return $false
     }
     $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $restoreErrors = 0
     foreach ($entry in @($snapshot.Entries)) {
         if ([bool]$entry.ValueExisted) {
             if (-not (Test-Path -LiteralPath $entry.Path)) { New-Item -Path $entry.Path -Force | Out-Null }
@@ -2781,7 +2728,8 @@ function Restore-AiFeatureSnapshot {
                 'DWord'       { [uint32]$entry.Value }
                 default       { [string]$entry.Value }
             }
-            New-ItemProperty -Path $entry.Path -Name $entry.Name -PropertyType $propertyType -Value $restoreValue -Force -ErrorAction Stop | Out-Null
+            try { New-ItemProperty -Path $entry.Path -Name $entry.Name -PropertyType $propertyType -Value $restoreValue -Force -ErrorAction Stop | Out-Null }
+            catch { $restoreErrors++ }
         } else {
             Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction SilentlyContinue
         }
@@ -2795,13 +2743,23 @@ function Restore-AiFeatureSnapshot {
             } catch {}
         }
     }
-    Write-Status OK ("Exact AI-feature policy state restored from {0}" -f $Path)
-    $Script:Results['AI Features'] = 'Previous policy state restored'
+    if ($restoreErrors -gt 0) {
+        Write-Status Warn ("Restored from {0}, but {1} value(s) could not be written - the state may be partial." -f $Path, $restoreErrors)
+        $Script:Results['AI Features'] = "Partial restore ($restoreErrors failed)"
+    } else {
+        Write-Status OK ("Exact AI-feature policy state restored from {0}" -f $Path)
+        $Script:Results['AI Features'] = 'Previous policy state restored'
+    }
     return $true
 }
 
 function Set-AiFeaturePrivacyProfile {
-    $snapshotPath = New-AiFeatureSnapshot
+    try { $snapshotPath = New-AiFeatureSnapshot }
+    catch {
+        Write-Status Fail ("Could not save the registry snapshot; aborting without changes: {0}" -f $_.Exception.Message)
+        $Script:HasFailure = $true
+        return $false
+    }
     Write-Status OK ("Exact registry snapshot saved: {0}" -f $snapshotPath)
     try {
         $changed = 0

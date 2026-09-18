@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+PC Corruption Fixer - deep-review correctness fixes (post-7.1.1):
+
+- SFC exit codes mapped correctly (1 = repaired, 2 = could not run). The old mapping reported exit 2 as "repaired" and treated a successful exit-1 repair as a failure.
+- Post-DISM verification accepts a successful repair, runs with the sleep block held, and no longer treats "could not run" as a pass.
+- Store re-register counts real successes via terminating errors; the result is no longer an unconditional PASS.
+- Time-sync repair checks `w32tm /register`'s exit code and reports a missing W32Time service instead of claiming success.
+- Startup-Viewer TEMP-path warning regex fixed (previously could never match).
+- Orphan-service scan strips `\\?\` / `\??\` device-path prefixes correctly (was a no-op, risking false "orphan" candidates).
+- AI privacy: snapshot failures abort cleanly before any change; partial restores are reported as partial.
+- Restore-point enablement failures surface; DISM CheckHealth, component-cleanup, and event-scan summaries no longer overclaim.
+- DNS snapshot covers all adapters (not only currently-Up ones); disk-space analyzer skips the multi-minute WinSxS walk.
+- Removed six unused display helper functions.
+
 ## Toolkit v2.0.0 (2026-07-25)
 
 Major safety rewrite of every tool. First release with the modular Gaming Optimizer, multi-profile Encrypted DNS Manager, Balanced/Strict Privacy Guard, and non-destructive Corruption Fixer defaults.
