@@ -12,9 +12,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ShugokiFable/windows-pc-toolkit/actions/workflows/ci.yml"><img src="https://github.com/ShugokiFable/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml"><img src="https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5b8a9a?labelColor=0e1418" alt="MIT License"></a>
-  <a href="https://github.com/ShugokiFable/windows-pc-toolkit/releases/tag/v2.0.0"><img src="https://img.shields.io/badge/release-v2.0.0-7a9aaa?labelColor=0e1418" alt="v2.0.0"></a>
+  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.0.0"><img src="https://img.shields.io/badge/release-v2.0.0-7a9aaa?labelColor=0e1418" alt="v2.0.0"></a>
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@ Earlier releases could "fix" things that made systems worse: Full Repair also re
 
 ## Quick start
 
-1. Download a [release](https://github.com/ShugokiFable/windows-pc-toolkit/releases/tag/v2.0.0) or clone this repo.
+1. Download a [release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.0.0) or clone this repo.
 2. Double-click **`START_TOOLKIT.bat`** for the launcher menu, **or** open a tool folder and run its `.bat`.
 3. Accept UAC.
 4. Prefer safe defaults; read each tool's README before Strict mode or network reset.

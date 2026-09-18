@@ -18,6 +18,6 @@ if "%choice%"=="1" call "%~dp0pc-corruption-fixer\Fix_Corruption.bat"
 if "%choice%"=="2" call "%~dp0pc-privacy-guard\Run_As_Admin.bat"
 if "%choice%"=="3" call "%~dp0dns-encrypted-doh\DNS_Encrypted_Manager.bat"
 if "%choice%"=="4" call "%~dp0pc-gaming-optimizer\Run_As_Admin.bat"
-if "%choice%"=="5" "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Validate_All.ps1" & pause
+if "%choice%"=="5" ( "%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Validate_All.ps1" & pause )
 if "%choice%"=="0" exit /b 0
 goto menu
