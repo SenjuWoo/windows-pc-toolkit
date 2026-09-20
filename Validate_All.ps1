@@ -31,7 +31,8 @@ Write-Host "`nChecking launchers..." -ForegroundColor Cyan
 foreach($bat in Get-ChildItem -LiteralPath $root -Recurse -Filter '*.bat' -File | Where-Object { -not (Test-IsNestedGithubPublish $_.FullName $root) }){
     $text=Get-Content -LiteralPath $bat.FullName -Raw
     if($text -notmatch [regex]::Escape('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe')){$failed=$true;Write-Host "[FAIL] Launcher does not use absolute PowerShell path: $($bat.FullName)" -ForegroundColor Red}
-    if($text -match '\\"'){$failed=$true;Write-Host "[FAIL] Launcher uses backslash-escaped quotes (breaks nested quoting): $($bat.FullName)" -ForegroundColor Red}
+    if($text -match '\"'){$failed=$true;Write-Host "[FAIL] Launcher uses backslash-escaped quotes (breaks nested quoting): $($bat.FullName)" -ForegroundColor Red}
+    if($text -match '-Verb\s+RunAs[^\r\n]*-ArgumentList'){$failed=$true;Write-Host "[FAIL] Launcher uses the silently-failing RunAs+ArgumentList elevation pattern: $($bat.FullName)" -ForegroundColor Red}
 }
 
 Write-Host "`nChecking encrypted DNS templates..." -ForegroundColor Cyan

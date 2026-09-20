@@ -1,6 +1,16 @@
 # Changelog
 
-## Toolkit v2.1.2 (2026-09-18)
+## Toolkit v2.1.3 (2026-09-18)
+
+Launcher fixes across the suite - the same silent-failure bug that broke the PC Cleaner start affected **eight more launchers** (all six DNS launchers, PC Privacy Guard, and both Gaming Optimizer launchers). The Encrypted DNS Manager not opening was this exact bug.
+
+- Every launcher now uses the proven self-elevation pattern (`net session` check -> relaunch the launcher elevated -> run the script with a direct argument; no nested `-ArgumentList` quoting).
+- Every launcher logs to `%LOCALAPPDATA%\Temp\<Tool>_launch.log`, verifies the elevated window actually started (sentinel file), and pauses with the exit code on failure instead of flashing away.
+- `Validate_All.ps1` now rejects the broken `Start-Process -Verb RunAs -ArgumentList` pattern outright.
+
+Tool scripts are unchanged; only launchers and validation were touched.
+
+## Toolkit v2.1.1 (2026-09-18)
 
 ### PC Cleaner 1.0.2
 
