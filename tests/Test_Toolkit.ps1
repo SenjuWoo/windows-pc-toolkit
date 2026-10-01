@@ -128,18 +128,31 @@ try {
     $tempRoot=Join-Path $fixture 'Temp'; $outside=Join-Path $fixture 'Outside'
     [void][IO.Directory]::CreateDirectory($tempRoot); [void][IO.Directory]::CreateDirectory($outside)
     [void][IO.Directory]::CreateDirectory((Join-Path $tempRoot 'Documents'))
-    foreach ($path in @((Join-Path $tempRoot 'old.tmp'),(Join-Path $tempRoot 'new.tmp'),(Join-Path $tempRoot 'Documents\keep.tmp'),(Join-Path $outside 'keep.tmp'))) {
+    foreach ($path in @((Join-Path $tempRoot 'old.tmp'),(Join-Path $tempRoot 'new.tmp'),(Join-Path $tempRoot 'accessed.tmp'),(Join-Path $tempRoot 'Documents\keep.tmp'),(Join-Path $outside 'keep.tmp'))) {
         [IO.File]::WriteAllText($path,'fixture')
         if ($path -notlike '*new.tmp') { [IO.File]::SetLastWriteTime($path,(Get-Date).AddDays(-10)); [IO.File]::SetLastAccessTime($path,(Get-Date).AddDays(-10)) }
     }
+    [IO.File]::SetLastAccessTime((Join-Path $tempRoot 'accessed.tmp'),(Get-Date))
     $link=Join-Path $tempRoot 'linked'
     New-Item -ItemType Junction -Path $link -Value $outside -ErrorAction Stop | Out-Null
     Check (@(Get-SuiteOldTempFiles @($tempRoot)).Count -eq 1) 'Age + protected data + junction boundaries'
     Check (-not (Test-SuitePathWithoutLinks (Join-Path $link 'keep.tmp') $tempRoot)) 'Nested junction cannot escape cleanup root'
     Check (-not (Test-SuitePathWithoutLinks (Join-Path $outside 'keep.tmp') $tempRoot)) 'Sibling path cannot escape cleanup root'
-    $summary=& $module { param($testRoot) $script:TestTempRoot=$testRoot; function script:Get-SuiteTempRoots { @($script:TestTempRoot) }; Invoke-SuiteTempCleanup } $tempRoot
+    # Hosted Windows may update access times or briefly open newly created files.
+    # Re-age ONLY this owned fixture and retry boundedly; production age/lock
+    # safeguards stay unchanged, and recently accessed data must still survive.
+    $oldFixture=Join-Path $tempRoot 'old.tmp'
+    for ($attempt=0; $attempt -lt 10; $attempt++) {
+        [IO.File]::SetCreationTime($oldFixture,(Get-Date).AddDays(-10))
+        [IO.File]::SetLastWriteTime($oldFixture,(Get-Date).AddDays(-10))
+        [IO.File]::SetLastAccessTime($oldFixture,(Get-Date).AddDays(-10))
+        $summary=& $module { param($testRoot) $script:TestTempRoot=$testRoot; function script:Get-SuiteTempRoots { @($script:TestTempRoot) }; Invoke-SuiteTempCleanup } $tempRoot
+        if (-not (Test-Path -LiteralPath $oldFixture)) { break }
+        Start-Sleep -Milliseconds 250
+    }
     Check (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'old.tmp'))) 'Old disposable file actually removed'
     Check (Test-Path -LiteralPath (Join-Path $tempRoot 'new.tmp')) 'Recent temp file preserved'
+    Check (Test-Path -LiteralPath (Join-Path $tempRoot 'accessed.tmp')) 'Old but recently accessed temp file preserved'
     Check (Test-Path -LiteralPath (Join-Path $tempRoot 'Documents\keep.tmp')) 'Protected data preserved'
     Check (Test-Path -LiteralPath (Join-Path $outside 'keep.tmp')) 'Linked destination preserved'
     Check ($summary -match '^1 aged files removed') 'Cleanup reports actual successful removals'
