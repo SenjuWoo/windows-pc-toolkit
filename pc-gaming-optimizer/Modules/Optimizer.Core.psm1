@@ -2,7 +2,7 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:ToolkitVersion = '4.0'
+$script:ToolkitVersion = '5.0'
 $script:StateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\GamingOptimizer'
 $script:SnapshotRoot = Join-Path $script:StateRoot 'Snapshots'
 $script:LogRoot = Join-Path $script:StateRoot 'Logs'
@@ -42,15 +42,13 @@ function Write-GamingHeader {
 function Get-RegistryValueState {
     param([string]$Path, [string]$Name)
     $exists = $false; $kind = $null; $value = $null
-    if (Test-Path -LiteralPath $Path) {
-        try {
-            $key = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if (Test-Path -LiteralPath $Path -ErrorAction Stop) {
+        $key = Get-Item -LiteralPath $Path -ErrorAction Stop
             if ($key.GetValueNames() -contains $Name) {
                 $exists = $true
                 $kind = $key.GetValueKind($Name).ToString()
                 $value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
             }
-        } catch { }
     }
     [pscustomobject]@{ Path=$Path; Name=$Name; Exists=$exists; Kind=$kind; Value=$value }
 }
@@ -77,7 +75,7 @@ function Restore-RegistryValueState {
     if ($State.Exists) {
         Set-RegistryValueExact -Path $State.Path -Name $State.Name -Value $State.Value -Kind $State.Kind
     } else {
-        if (Test-Path -LiteralPath $State.Path) { Remove-ItemProperty -LiteralPath $State.Path -Name $State.Name -ErrorAction SilentlyContinue }
+        if ((Get-RegistryValueState -Path $State.Path -Name $State.Name).Exists) { Remove-ItemProperty -LiteralPath $State.Path -Name $State.Name -ErrorAction Stop }
     }
 }
 
@@ -291,7 +289,8 @@ function Invoke-ShaderCacheCleanup {
     foreach ($path in $paths) {
         if (-not (Test-Path -LiteralPath $path)) { continue }
         foreach ($item in @(Get-ChildItem -LiteralPath $path -Force -Recurse -File -ErrorAction SilentlyContinue)) {
-            try { $bytes += $item.Length; Remove-Item -LiteralPath $item.FullName -Force -ErrorAction Stop; $removed++ } catch { }
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            try { $length=$item.Length; Remove-Item -LiteralPath $item.FullName -Force -ErrorAction Stop; $bytes+=$length; $removed++ } catch { }
         }
     }
     Write-ToolStatus OK ("Removed {0} shader-cache files ({1:N1} MB)." -f $removed, ($bytes / 1MB))
@@ -499,6 +498,7 @@ function Invoke-GameBooster {
     $idText=Read-Host '  Enter the game process ID, or 0 to cancel'
     $pidValue=0
     if (-not [int]::TryParse($idText,[ref]$pidValue) -or $pidValue -le 0) { return }
+    $p=$null; $old=$null
     try {
         $p=Get-Process -Id $pidValue -ErrorAction Stop
         $old=$p.PriorityClass
@@ -507,9 +507,11 @@ function Invoke-GameBooster {
         Write-ToolStatus OK ("Session mode active for {0}. Priority is {1}; sleep is blocked." -f $p.ProcessName,$p.PriorityClass)
         Write-ToolStatus INFO 'Press Enter to end session mode. No RAM purge or global timer request is used.'
         Read-Host | Out-Null
-        try { if (-not $p.HasExited) { $p.PriorityClass=$old } } catch { }
     } catch { Write-ToolStatus FAIL $_.Exception.Message }
-    finally { Disable-StayAwake }
+    finally {
+        if ($p -and $null -ne $old) { try { if (-not $p.HasExited) { $p.PriorityClass=$old } } catch { Write-ToolStatus WARN 'The game priority could not be restored.' } }
+        Disable-StayAwake
+    }
 }
 
 function Show-VrAudit {

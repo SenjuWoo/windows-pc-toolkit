@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   powershell:
-    name: PowerShell syntax + PSScriptAnalyzer
+    name: PowerShell + native Windows regression checks
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -50,6 +50,18 @@ jobs:
             throw "PSScriptAnalyzer reported $($issues.Count) error-level issue(s)."
           }
           Write-Host "PSScriptAnalyzer: no error-level issues."
+
+      - name: Toolkit static validation (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Toolkit static validation failed." }
+
+      - name: Real registry, filesystem, worker and WPF regression checks
+        shell: powershell
+        run: |
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Toolkit regression checks failed." }
 
   data:
     name: JSON + Python validation

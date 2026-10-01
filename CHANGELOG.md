@@ -1,5 +1,17 @@
 # Changelog
 
+## Toolkit 3.0.0 (2026-10-01)
+
+- New native WPF dashboard: Optimize, Startup/tasks, App debloat, Encrypted DNS, Recovery/reports and Repair/tools. One-click six-action recommended profile, eleven optional choices and reviewed app/startup selections in one journal.
+- Typed before-write registry backups, read-back, conflict-aware/idempotent undo, per-action failure reporting and partial registry rollback. UTF-8 state and quoted Unicode/space/apostrophe paths.
+- Startup Run entries and third-party boot/logon tasks; consumer-AppX allowlist with verified package copies before removal. Essential packages stay protected. App-data and cache deletion limits are explicit.
+- DNS 2.2: modify existing DoH entries in place, GUID-based adapter restore, per-family automatic/static state, affected-entry snapshots, failed live Quad9 checks fail verification, AdGuard profile and Mullvad public-service retirement handling.
+- Cleaner 1.1: aged-temp and link guards, protected model/app stores/backups/Recall/update data, targeted registry-care journal and consistent selection numbering.
+- Gaming 5.0: root one-click profile integration and interrupted-session priority restoration.
+- Fixer 7.2: DISM before SFC, actual native output rather than guessed SFC repair verdicts, guarded shared temp cleanup, pending-update restart checks, checked DNS recovery, and update-cache repair that aborts on failed stops and reports partial/restart failures.
+- Privacy 2.1: fail closed on unreadable registry snapshot state.
+- 71 native Windows regression/boundary checks, fresh-package WPF/worker tests, expanded CI, actual dashboard render and rewritten documentation.
+- Recommend optimizerDuck in the dashboard and GitHub README, with an explicit coverage map. No Duck source or executable is bundled.
 ## Toolkit v2.1.3 (2026-09-18)
 
 Launcher fixes across the suite - the same silent-failure bug that broke the PC Cleaner start affected **eight more launchers** (all six DNS launchers, PC Privacy Guard, and both Gaming Optimizer launchers). The Encrypted DNS Manager not opening was this exact bug.

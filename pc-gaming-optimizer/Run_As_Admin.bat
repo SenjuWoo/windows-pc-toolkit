@@ -1,5 +1,5 @@
 @echo off
-title PC Gaming Optimizer v4.0
+title PC Gaming Optimizer v5.0
 setlocal EnableExtensions
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LOG=%LOCALAPPDATA%\Temp\GamingOptimizer_launch.log"

@@ -1,5 +1,5 @@
 @echo off
-title Encrypted DNS Manager v2.1
+title Encrypted DNS Manager v2.2
 setlocal EnableExtensions
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LOG=%LOCALAPPDATA%\Temp\DNSManager_launch.log"

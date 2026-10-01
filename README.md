@@ -1,130 +1,97 @@
-<p align="center">
-  <img src="docs/images/logo.svg" width="72" height="72" alt="Windows PC Toolkit mark">
-</p>
+# Windows PC Toolkit
 
-<h1 align="center">Windows PC Toolkit</h1>
+**Portable gaming, cleanup, debloat, privacy and repair in one native Windows dashboard.** Built-in PowerShell and WPF; no account, installer, advertising or background agent.
 
-<p align="center"><strong>Safe-by-default PowerShell tools for Windows 10/11.</strong></p>
+[![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-<p align="center">
-  Repair, cleanup, privacy, encrypted DNS, and gaming — rebuilt around exact snapshots,<br>
-  rollback, and honest diagnostics. No tweak pile.
-</p>
+![Toolkit dashboard](docs/images/dashboard.png)
 
-<p align="center">
-  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml"><img src="https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5b8a9a?labelColor=0e1418" alt="MIT License"></a>
-  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.1.2"><img src="https://img.shields.io/badge/release-v2.1.2-7a9aaa?labelColor=0e1418" alt="v2.1.2"></a>
-</p>
+Rendered from the actual WPF dashboard with initial selections. Hardware and results load on the target PC.
 
-<p align="center">
-  <a href="#quick-start">Quick start</a>
-  ·
-  <a href="#state-locations">Snapshots</a>
-  ·
-  <a href="#validate">Validate</a>
-  ·
-  <a href="#honest-status">Honest status</a>
-  ·
-  <a href="CHANGELOG.md">Changelog</a>
-</p>
+## Start here
 
-This git tree has no application screenshot. The UI is `START_TOOLKIT.bat` and each tool's console menu.
+Download the **complete current source** with GitHub's **Code → Download ZIP**, extract it, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together. Older releases do not contain this dashboard.
 
-| Folder | Version | Purpose |
-| --- | ---: | --- |
-| [`pc-corruption-fixer/`](pc-corruption-fixer/) | **7.1.2** | SFC/DISM, disk repair, Windows Update repair, diagnostics, reversible AI privacy policies |
-| [`pc-privacy-guard/`](pc-privacy-guard/) | **2.0** | Balanced or Strict privacy profiles with exact undo |
-| [`dns-encrypted-doh/`](dns-encrypted-doh/) | **2.1** | One-provider-at-a-time Windows DNS-over-HTTPS manager |
-| [`pc-gaming-optimizer/`](pc-gaming-optimizer/) | **4.0** | Diagnostics + reversible supported gaming settings (no tweak pile) |
-| [`pc-cleaner/`](pc-cleaner/) | **1.0.2** | Scan-first disk cleanup + registry care; never deletes user data |
+**Optimize now** applies six recommended actions together:
 
-## Why this rewrite exists
+- Enable Windows Game Mode.
+- Disable promotional suggestions and silent suggested-app installs.
+- Disable advertising personalization and tailored experiences.
+- Disable activity-history publishing and upload.
+- Clean disposable Temp files older than seven days, checking write/access age and skipping protected paths, links and locked files.
+- Refresh cached DNS answers, preserving provider and adapter settings.
 
-Earlier releases could "fix" things that made systems worse: Full Repair also reset networking, undo scripts guessed defaults, DNS mixed providers, and the gaming pack applied permanent timer/NIC/GPU registry hacks.
+**Preview changes** explains the plan without applying it. Eleven additional choices cover captures, mouse acceleration, animations, Explorer/taskbar preferences, Recall opt-out, Delivery Optimization cleanup, SSD ReTrim and targeted registry care. Some settings need sign-out to refresh; no restart is forced.
 
-**v2.x toolkit design:**
+For a larger one-click run, first select desired apps and startup items on their pages, then tick **Also apply my selected startup entries and app removals** on Optimize. They share one operation/recovery journal. App removal has a confirmation naming the apps.
 
-- **JSON snapshots** under `%ProgramData%\WindowsPCToolkit` — restore what was actually there
-- **Full Repair does not reset the network stack**
-- **Network reset** aborts without a backup, preserves automatic vs static DNS, verifies DoH rollback
-- **Encrypted DNS**: one provider profile, official HTTPS DoH templates, no plaintext UDP fallback
-- **Gaming**: measurement-first; no permanent timer, Nagle, SysMain, MSI, PowerMizer, or standby-purge hacks
-- **Privacy**: Balanced preserves WU/games/browsers/location; Strict is separate and confirmed
-- **AI privacy**: policy-only and reversible — never uninstalls apps or disables Search/services
-- **Cleaner**: scan-first with plainly labeled categories; never touches cookies, logins, history, app state, or AI model stores
+## Six organized pages
 
-## Quick start
-
-1. Download a [release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v2.1.2) or clone this repo.
-2. Double-click **`START_TOOLKIT.bat`** for the launcher menu, **or** open a tool folder and run its `.bat`.
-3. Accept UAC.
-4. Prefer safe defaults; read each tool's README before Strict mode or network reset.
-
-```text
-windows-pc-toolkit/
-  START_TOOLKIT.bat              # one menu for all tools + Validate_All
-  Validate_All.ps1               # static safety/parser checks
-  pc-corruption-fixer/           Fix_Corruption.bat
-  pc-privacy-guard/              Run_As_Admin.bat
-  dns-encrypted-doh/             DNS_Encrypted_Manager.bat
-  pc-gaming-optimizer/           Run_As_Admin.bat
-  pc-cleaner/                    Run_As_Admin.bat
-```
-
-All launchers elevate with an **absolute** `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` path (no PATH hijack).
-
-## State locations
-
-| Tool | Snapshots |
+| Page | Features |
 | --- | --- |
-| Gaming Optimizer | `%ProgramData%\WindowsPCToolkit\GamingOptimizer\Snapshots` |
-| Privacy Guard | `%ProgramData%\WindowsPCToolkit\PrivacyGuard\Snapshots` |
-| Encrypted DNS | `%ProgramData%\WindowsPCToolkit\EncryptedDNS\Snapshots` |
-| Corruption Fixer | `%ProgramData%\WindowsPCToolkit\PCFixer\NetworkSnapshots` · `AIFeatureSnapshots` |
-| PC Cleaner | `%ProgramData%\WindowsPCToolkit\Cleaner\Logs` · `RegistryBackups` |
+| Optimize | Recommended/custom choices, read-only preview, progress and results. |
+| Startup & tasks | Registry startup entries and third-party boot/logon tasks; reviewed disable and original-state undo. Microsoft tasks are excluded. |
+| App debloat | Consumer-app removal for your account after verified package copies. Store, Xbox, Gaming Services, WebView, frameworks and essential packages are excluded. |
+| Encrypted DNS | Physical-adapter selection, coherent Quad9/AdGuard profiles, verification, previous-state restore and automatic DNS. |
+| Recovery & reports | History, settings/startup undo, failure details and preservation of intervening registry changes. |
+| Repair & tools | DISM then SFC, restore points, hardware/essential-service status, advanced consoles and Windows settings. |
 
-A failed apply rolls back from the snapshot it just wrote. Undo restores the recorded values, not guessed defaults.
+The gaming console adds HAGS controls, temporary game-session priority/stay-awake, GPU/network/storage/display/PCVR audits and JSON benchmark snapshots. Session settings are released in `finally`, including interrupted sessions.
 
-## Validate
+## Compatibility and registry care
 
-On Windows, run elevated:
+The recommended profile preserves Windows Update, Defender, Store, Xbox, Gaming Services, browser state, AI model stores, drivers, power/sleep, shaders, network offloads, timers and GPU interrupt settings. It does not mass-disable services, reset networking or remove packages without reviewed selections.
+
+Strict privacy, network reset and shader troubleshooting remain explicit advanced choices. No optimizer guarantees FPS gains or policy effects on every edition/build. Registry read-back proves a saved setting, not better frame times.
+
+**Registry care is targeted repair:** remove dead startup/MuiCache values only when their executable is confirmed absent on a ready fixed local drive. Uninstall/App Paths/COM registrations and shortcuts remain for review. Broad registry sweeping is not an optimization profile.
+
+## Encrypted DNS
+
+Existing DoH entries are updated in place. Restore matches adapter GUIDs and separately preserves IPv4/IPv6 automatic versus static modes. Unrelated adapters, VPNs and other providers' DoH entries are preserved. Failed apply attempts rollback and reports any rollback failure.
+
+Quad9 requires its live TXT transport test to report `doh`; an unavailable test fails verification. AdGuard checks configuration/resolution without claiming the same live attestation.
+
+**Mullvad public encrypted DNS ends November 2, 2026.** Legacy profiles remain until then; new applies are subsequently blocked, while backup restore remains available. Use Quad9 or AdGuard for ongoing service. [Mullvad announcement](https://mullvad.net/en/blog/2026/9/3/shutting-down-our-public-encrypted-dns-servers-and-sponsoring-quad9-instead), [Quad9 services](https://docs.quad9.net/services/), [AdGuard DNS](https://adguard-dns.io/en/public-dns.html).
+
+## Recommended companion: optimizerDuck
+
+**We recommend [optimizerDuck](https://github.com/itsfatduck/optimizerDuck)** for broader Windows customization, optimization and management. It is a useful open-source companion and informed our coverage goals. Download it from [its own releases](https://github.com/itsfatduck/optimizerDuck/releases).
+
+This toolkit uses an independent implementation and a narrower automatic profile focused on update/game compatibility. No Duck binary or GPL source is bundled. See the [feature coverage map](docs/FEATURE_COVERAGE.md) for overlap and differences.
+
+## Recovery
+
+Dashboard reports, typed registry journals, task states and verified package copies live in `%ProgramData%\WindowsPCToolkit\Suite\Runs` and `Suite\AppBackups`.
+
+Registry state is saved **before** mutation, preserves types/literal environment strings, and is checked after restore. Undo keeps intervening registry changes and lists conflicts. Repeating completed undo preserves current state. Failed registry actions attempt to restore partial changes.
+
+Deleted temporary/cache files are not recoverable through the journal. App removal can delete app data; backups support package re-registration, not app-data recovery. Dependencies/servicing may prevent re-registration; the report identifies failures and Microsoft Store remains the reinstall route. System repair is logged maintenance, not a reversible registry tweak.
+
+Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `GamingOptimizer\Snapshots`, `PrivacyGuard\Snapshots`, `EncryptedDNS\Snapshots`, `PCFixer\NetworkSnapshots` / `AIFeatureSnapshots`, and `Cleaner\Logs` / `RegistryBackups`.
+
+## Components
+
+| Component | Version | Documentation |
+| --- | ---: | --- |
+| Dashboard / core | 3.0.0 | This page |
+| Gaming Optimizer | 5.0 | [Gaming](pc-gaming-optimizer/README.md) |
+| PC Cleaner | 1.1 | [Cleanup/registry](pc-cleaner/README.md) |
+| Corruption Fixer | 7.2 | [Repair](pc-corruption-fixer/README.md) |
+| Privacy Guard | 2.1 | [Privacy](pc-privacy-guard/README.md) |
+| Encrypted DNS | 2.2 | [DNS](dns-encrypted-doh/README.md) |
+
+## Requirements and validation
+
+Windows 11 is the main target. General tools also support Windows 10; Windows 11 options are build-gated and system DoH requires Windows 11. Use built-in **Windows PowerShell 5.1** in STA mode; the launcher supplies the executable/arguments. No extra runtime is needed.
 
 ```powershell
-.\Validate_All.ps1
+# Read-only plan
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Toolkit.Run.ps1 -Preview
+# Static checks
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
+# Disposable registry/filesystem, actual WPF, simulated failures
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
 ```
 
-Uses Microsoft's PowerShell parser on every script, checks launcher paths and DoH templates, and rejects reintroduced unsafe optimization writes.
-
-## Requirements
-
-- Windows 10 (2004+) or Windows 11
-- PowerShell 5.1+ (built-in)
-- Administrator rights for almost everything
-- Full DoH APIs: Windows 11 / Server 2022+ recommended for Encrypted DNS
-
-## Honest status
-
-Verified in this tree:
-
-- latest GitHub release **v2.1.2**
-- [`VALIDATION_REPORT.md`](VALIDATION_REPORT.md) — static validation **passed** (2026-09-18): 31 PowerShell files parsed, absolute launcher paths, official HTTPS DoH templates, Quad9 secure IPv4/IPv6, no UDP fallback, safety-regression checks
-- CI (`.github/workflows/ci.yml`) — PowerShell parse + PSScriptAnalyzer, JSON, Python compile
-
-Not claimed:
-
-- a full runtime confirmation of SFC, DISM, DnsClient, or registry policy application on your machine
-- that every Windows edition honours every AI/privacy policy
-- a GUI screenshot (console menus only)
-
-After install, run `Validate_All.ps1` elevated on the target Windows machine and exercise tools with restore points enabled.
-
-## License
-
-[MIT](LICENSE)
-
-## Disclaimer
-
-These scripts change Windows services, registry policies, and network settings. Create a **System Restore point** first (tools offer this where it matters). You run them at your own risk. No warranty.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full rebuild notes.
+Tests do not apply live optimization or change live DNS/update services. [Validation evidence and limits](VALIDATION_REPORT.md).

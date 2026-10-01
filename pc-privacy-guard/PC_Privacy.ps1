@@ -1,12 +1,12 @@
 ﻿#requires -version 5.1
 <#[
-PC Privacy Guard v2.0
+PC Privacy Guard v2.1
 Balanced and strict privacy profiles with exact state snapshots. The default
 profile reduces personalization and activity upload without disabling services
 needed by Windows Update, Insider builds, games, browsers, or device features.
 ]#>
 $ErrorActionPreference='Stop'
-$Version='2.0'
+$Version='2.1'
 $StateRoot=Join-Path $env:ProgramData 'WindowsPCToolkit\PrivacyGuard'
 $SnapshotRoot=Join-Path $StateRoot 'Snapshots'
 $script:CurrentSnapshot=$null
@@ -26,7 +26,7 @@ function Initialize-State{foreach($p in @($StateRoot,$SnapshotRoot)){if(-not(Tes
 function Get-RegState{
     param([string]$Path,[string]$Name)
     $exists=$false;$kind=$null;$value=$null
-    if(Test-Path -LiteralPath $Path){try{$key=Get-Item -LiteralPath $Path -ErrorAction Stop;if($key.GetValueNames()-contains $Name){$exists=$true;$kind=$key.GetValueKind($Name).ToString();$value=$key.GetValue($Name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}}catch{}}
+    if(Test-Path -LiteralPath $Path -ErrorAction Stop){$key=Get-Item -LiteralPath $Path -ErrorAction Stop;if($key.GetValueNames()-contains $Name){$exists=$true;$kind=$key.GetValueKind($Name).ToString();$value=$key.GetValue($Name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}}
     [pscustomobject]@{Path=$Path;Name=$Name;Exists=$exists;Kind=$kind;Value=$value}
 }
 function Set-RegExact{

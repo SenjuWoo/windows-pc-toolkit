@@ -1,24 +1,24 @@
-#requires -version 5.1
+﻿#requires -version 5.1
 <#
 .SYNOPSIS
-    PC Cleaner v1.0.2 - scan-first disk cleanup and registry care for Windows 10/11.
+    PC Cleaner v1.1 - scan-first disk cleanup and registry care for Windows 10/11.
 .DESCRIPTION
     Every category is labeled with what it is and why it is safe. Nothing is
     deleted without an explicit profile/pick and a confirmation. User data -
     documents, browser cookies/logins/history, app state, AI model stores - is
     never deleted: one protected-path guard blocks those names everywhere.
-    Registry care only removes entries that are provably orphaned and exports a
-    .reg backup before every removal.
+    Registry care removes confirmed dead startup/MuiCache values and saves a
+    typed recovery journal before every removal.
 .NOTES
     Windows PowerShell 5.1. Run elevated (the launcher does it).
 #>
 param(
-    [ValidateSet('Menu','Scan','SelfTest')]
+    [ValidateSet('Menu','Scan','SelfTest','Library')]
     [string]$Action = 'Menu'
 )
 
 $ErrorActionPreference = 'Stop'
-$Script:Version = '1.0.2'
+$Script:Version = '1.1'
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
 $RegBackupRoot  = Join-Path $StateRoot 'RegistryBackups'
@@ -154,7 +154,7 @@ function Get-CleanCategories {
             Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=@("$P\Microsoft\Windows\WER\ReportArchive","$P\Microsoft\Windows\WER\ReportQueue","$P\Microsoft\Windows\WER\Temp","$L\Microsoft\Windows\WER\ReportArchive","$L\Microsoft\Windows\WER\ReportQueue");
             Desc='Windows Error Reporting queues. Crash reports you already sent or dismissed.' }
         [pscustomobject]@{ Id='CrashDumps';  Section='System'; Label='Crash dumps and minidumps';
-            Risk='SAFE'; Profile='Balanced'; Kind='Files'; Paths=@("$L\CrashDumps\*.dmp","$W\Minidump\*.dmp","$W\MEMORY.DMP");
+            Risk='CAREFUL'; Profile='Strict'; Kind='Files'; Paths=@("$L\CrashDumps\*.dmp","$W\Minidump\*.dmp","$W\MEMORY.DMP");
             Desc='Dumps from app/kernel crashes. Delete unless you are actively debugging a crash.' }
         [pscustomobject]@{ Id='INetCache';   Section='System'; Label='Legacy internet cache';
             Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=@("$L\Microsoft\Windows\INetCache");
@@ -163,7 +163,7 @@ function Get-CleanCategories {
             Risk='SAFE'; Profile='Balanced'; Kind='Special'; Paths=@();
             Desc='Update/Store delivery cache. Removed with the official Windows cmdlet.' }
         [pscustomobject]@{ Id='UpdateLogs';  Section='System'; Label='CBS/DISM servicing logs';
-            Risk='SAFE'; Profile='Balanced'; Kind='Files'; Paths=@("$W\Logs\CBS\*.log","$W\Logs\DISM\*.log");
+            Risk='CAREFUL'; Profile='Strict'; Kind='Files'; Paths=@("$W\Logs\CBS\*.log","$W\Logs\DISM\*.log");
             Desc='Component-servicing logs. Locked logs (during a scan) are skipped.' }
         [pscustomobject]@{ Id='EdgeCaches';   Section='Browsers'; Label='Edge caches';
             Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=$edgeCaches;
@@ -178,20 +178,20 @@ function Get-CleanCategories {
             Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=$ffCaches;
             Desc='cache2/startup cache only. Cookies, logins, history and bookmarks are never touched.' }
         [pscustomobject]@{ Id='GpuCaches';   Section='Graphics'; Label='GPU shader caches';
-            Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=$gpuCaches;
+            Risk='CAREFUL'; Profile='Strict'; Kind='Children'; Paths=$gpuCaches;
             Desc='Compiled shader caches (NVIDIA/AMD/Intel/D3D). First launch of a game may stutter while they rebuild.' }
         [pscustomobject]@{ Id='IdeCaches';   Section='AI & Dev'; Label='VS Code / Cursor / Windsurf caches';
             Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=$ideCaches;
             Desc='Editor caches and logs. Settings, extensions and history are not touched.' }
         [pscustomobject]@{ Id='AiAppCaches'; Section='AI & Dev'; Label='AI assistant model caches';
-            Risk='SAFE'; Profile='Balanced'; Kind='Children'; Paths=$aiCaches;
+            Risk='KEEP'; Profile='Report'; Kind='Report'; Paths=$aiCaches;
             Desc='Edge/Chrome AI model stores and Copilot app caches. Re-downloaded on demand.' }
         [pscustomobject]@{ Id='BakFiles';    Section='Files'; Label='Patcher leftover backups (.bak/.old/.tmp/.orig)';
-            Risk='SAFE'; Profile='Balanced'; Kind='Special'; Paths=@();
-            Desc='Backups that sit next to their original file (mod patchers leave these). Files with no surviving original are kept.' }
+            Risk='KEEP'; Profile='Report'; Kind='Special'; Paths=@();
+            Desc='Backup review only. A surviving original does not prove a backup is disposable; no profile deletes these.' }
 
         [pscustomobject]@{ Id='WUCache';     Section='System'; Label='Windows Update download cache';
-            Risk='CAREFUL'; Profile='Strict'; Kind='Children'; Paths=@("$W\SoftwareDistribution\Download");
+            Risk='KEEP'; Profile='Report'; Kind='Report'; Paths=@("$W\SoftwareDistribution\Download");
             Desc='Update downloads. Partial/stopped downloads re-download; in-progress ones are locked and skipped.' }
         [pscustomobject]@{ Id='Prefetch';    Section='System'; Label='Prefetch app-launch cache';
             Risk='CAREFUL'; Profile='Strict'; Kind='Children'; Paths=@("$W\Prefetch");
@@ -200,7 +200,7 @@ function Get-CleanCategories {
             Risk='CAREFUL'; Profile='Strict'; Kind='Children'; Paths=$pwaCaches;
             Desc='Offline caches for installed web apps. Offline copies rebuild on next online visit.' }
         [pscustomobject]@{ Id='RecallData';  Section='AI & Dev'; Label='Windows Recall snapshots';
-            Risk='STRICT'; Profile='Strict'; Kind='Children'; Paths=@("$L\CoreAIPlatform.00");
+            Risk='KEEP'; Profile='Report'; Kind='Report'; Paths=@("$L\CoreAIPlatform.00");
             Desc='Your searchable Recall screen history. Deleting this erases that history permanently.' }
         [pscustomobject]@{ Id='WindowsOld';  Section='System'; Label='Previous Windows installation (Windows.old)';
             Risk='STRICT'; Profile='Strict'; Kind='Special'; Paths=@();
@@ -305,6 +305,17 @@ function Remove-ItemSafe {
     param([string]$Path, [switch]$Directory)
     if (Test-IsProtectedPath -Path $Path) { return $false }
     try {
+        $item=Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+        if ($Directory) {
+            $stack=New-Object Collections.Stack; $stack.Push($Path)
+            while ($stack.Count) {
+                foreach ($child in Get-ChildItem -LiteralPath $stack.Pop() -Force -ErrorAction Stop) {
+                    if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Test-IsProtectedPath $child.FullName)) { return $false }
+                    if ($child.PSIsContainer) { $stack.Push($child.FullName) }
+                }
+            }
+        }
         if ($Directory) { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop }
         else            { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop }
         return $true
@@ -346,9 +357,17 @@ function Get-BakCandidates {
 function Invoke-CleanCategory {
     param($Category)
     $result = [pscustomobject]@{ Id = $Category.Id; Label = $Category.Label; Removed = 0; Skipped = 0; Bytes = [long]0; Note = '' }
+    if ($Category.Profile -eq 'Report' -or $Category.Kind -eq 'Report') { $result.Note='Review only; kept all files.'; return $result }
     switch ($Category.Kind) {
         'Children' {
             foreach ($dir in Resolve-CategoryDirs -Category $Category) {
+                if ($Category.Id -in @('UserTemp','WindowsTemp')) {
+                    foreach ($file in Get-DisposableTempFiles -Roots @($dir.FullName)) {
+                        if (Remove-ItemSafe $file.FullName) { $result.Removed++; $result.Bytes+=$file.Length }
+                        else { $result.Skipped++ }
+                    }
+                    continue
+                }
                 foreach ($child in @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)) {
                     if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $result.Skipped++; continue }
                     $size = if ($child.PSIsContainer) {
@@ -422,6 +441,24 @@ function Get-CommandTargetPath {
     return $c
 }
 
+function Get-DisposableTempFiles {
+    param([string[]]$Roots,[int]$Days=7)
+    $cutoff=(Get-Date).AddDays(-[math]::Max(7,$Days))
+    foreach ($root in $Roots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        $rootItem=Get-Item -LiteralPath $root -Force -ErrorAction Stop
+        if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        $stack=New-Object Collections.Stack; $stack.Push($rootItem.FullName)
+        while ($stack.Count) {
+            foreach ($item in Get-ChildItem -LiteralPath $stack.Pop() -Force -ErrorAction SilentlyContinue) {
+                if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Test-IsProtectedPath $item.FullName)) { continue }
+                if ($item.PSIsContainer) { $stack.Push($item.FullName) }
+                elseif ($item.LastWriteTime -lt $cutoff -and $item.LastAccessTime -lt $cutoff) { $item }
+            }
+        }
+    }
+}
+
 function Get-RegistryIssues {
     $issues = New-Object System.Collections.ArrayList
 
@@ -433,13 +470,14 @@ function Get-RegistryIssues {
         foreach ($k in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
             try {
                 $props = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction Stop
-                if ($props.SystemComponent -eq 1) { continue }   # system-managed (KB entries etc.)
+                if ($props.PSObject.Properties.Name -contains 'SystemComponent' -and $props.SystemComponent -eq 1) { continue }
+                if ($props.PSObject.Properties.Name -notcontains 'UninstallString') { continue }
                 $target = Get-CommandTargetPath ([string]$props.UninstallString)
                 if ($target -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                     [void]$issues.Add([pscustomobject]@{
-                        Category = 'Orphaned uninstall entries'; Kind = 'Key'
+                        Category = 'Missing uninstallers (review only)'; Kind = 'Review'
                         Key = $k.PSPath; Name = $k.PSChildName
-                        Display = [string]$props.DisplayName; Evidence = "missing: $target"
+                        Display = $k.PSChildName; Evidence = "missing: $target"
                     })
                 }
             } catch { }
@@ -480,7 +518,7 @@ function Get-RegistryIssues {
                 $target = [Environment]::ExpandEnvironmentVariables($target.Trim('"'))
                 if ($target -and [IO.Path]::IsPathRooted($target) -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                     [void]$issues.Add([pscustomobject]@{
-                        Category = 'Stale App Paths'; Kind = 'Key'
+                        Category = 'Stale App Paths (review only)'; Kind = 'Review'
                         Key = $k.PSPath; Name = $k.PSChildName
                         Display = $k.PSChildName; Evidence = "missing: $target"
                     })
@@ -532,100 +570,49 @@ function Get-RegistryIssues {
 }
 
 function Invoke-RegistryCare {
-    Assert-Admin; Initialize-State
-    Write-Host ''
-    Write-Status Step 'Scanning registry for provably orphaned entries...'
-    $issues = Get-RegistryIssues
-    $total = @($issues).Count
-    if ($total -eq 0) {
-        Write-Status OK 'No orphaned registry entries found.'
-        return
+    Assert-Admin
+    Import-Module (Join-Path $PSScriptRoot '..\Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
+    $issues=@(Get-RegistryIssues | Sort-Object Category,Display)
+    if (-not $issues.Count) { Write-Status OK 'No registry review candidates found.'; return }
+    for ($i=0; $i -lt $issues.Count; $i++) {
+        Write-Host ("  [{0}] {1}: {2} ({3})" -f ($i+1),$issues[$i].Category,$issues[$i].Display,$issues[$i].Evidence)
     }
-    $i = 0
-    foreach ($group in ($issues | Group-Object Category)) {
-        Write-Host ''
-        Write-Host ("  {0} ({1})" -f $group.Name, $group.Count) -ForegroundColor Cyan
-        foreach ($item in $group.Group) {
-            $i++
-            Write-Host ("   [{0}] {1}  ({2})" -f $i, $item.Display, $item.Evidence)
-        }
-    }
-    Write-Host ''
-    Write-Status Info 'Only provably orphaned entries are listed. Every removal is exported to a .reg backup first.'
-    $pick = Read-Host '  Remove which? [A]ll, comma list like 1,3-5, or 0 to cancel'
-    if ($pick -eq '0' -or [string]::IsNullOrWhiteSpace($pick)) { Write-Status Skip 'No changes made.'; return }
-
-    $selected = @()
-    if ($pick -match '^[Aa]$') { $selected = @($issues) }
+    Write-Status Info 'Maintenance can remove verified dead startup and MuiCache values. Missing uninstallers, app registrations and shortcuts are retained for review.'
+    $pick=Read-Host '  Repair [A]ll eligible values, comma-separated numbers, or 0 to cancel'
+    if ($pick -eq '0' -or [string]::IsNullOrWhiteSpace($pick)) { return }
+    $selected=@()
+    if ($pick -match '^[Aa]$') { $selected=$issues }
     else {
-        foreach ($part in ($pick -split ',')) {
-            if ($part -match '^\s*(\d+)\s*-\s*(\d+)\s*$') {
-                foreach ($n in ([int]$Matches[1])..([int]$Matches[2])) {
-                    if ($n -ge 1 -and $n -le @($issues).Count) { $selected += $issues[$n - 1] }
+        foreach ($part in $pick -split ',') {
+            $index=0
+            if ([int]::TryParse($part.Trim(),[ref]$index) -and $index -gt 0 -and $index -le $issues.Count) { $selected+=$issues[$index-1] }
+        }
+    }
+    if (-not $selected.Count) { return }
+    $lock=Enter-SuiteOperation
+    try {
+        $run=New-SuiteRun 'RegistryCare'
+        foreach ($issue in $selected) {
+            try {
+                $target=if ($issue.Category -eq 'Dead startup entries') { Get-CommandTargetPath $issue.Display } else { $issue.Display }
+                if ($issue.Kind -ne 'Value' -or $issue.Category -notin @('Dead startup entries','Stale MuiCache entries') -or -not (Test-SuiteMissingExecutable $target)) {
+                    Add-SuiteStep $run $issue.Display 'Skipped' 'Review candidate retained. No registry key/app registration/shortcut removed.'
+                    continue
                 }
-            } elseif ($part -match '^\s*(\d+)\s*$') {
-                $idx = [int]$Matches[1]
-                if ($idx -ge 1 -and $idx -le @($issues).Count) { $selected += $issues[$idx - 1] }
-            }
+                Set-SuiteRegistry $run $issue.Key $issue.Name $null -Remove
+                Add-SuiteStep $run $issue.Name 'Applied' 'Dead value removed with exact typed-value backup.'
+            } catch { Add-SuiteStep $run $issue.Name 'Failed' $_.Exception.Message }
         }
-        $selected = @($selected | Where-Object { $_ })
-    }
-    if (@($selected).Count -eq 0) { Write-Status Skip 'Nothing valid selected.'; return }
-
-    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $runDir = Join-Path $RegBackupRoot $stamp
-    New-Item -ItemType Directory -Path $runDir -Force | Out-Null
-    $manifest = New-Object System.Collections.ArrayList
-    $n = 0; $removed = 0; $failed = 0
-    foreach ($item in $selected) {
-        $n++
-        switch ($item.Kind) {
-            'Key' {
-                $backup = Join-Path $runDir ("{0:d3}_key.reg" -f $n)
-                $regPath = ($item.Key -replace '^.*Registry::', '') -replace '^HKLM:', 'HKEY_LOCAL_MACHINE' -replace '^HKCU:', 'HKEY_CURRENT_USER'
-                & "$env:SystemRoot\System32\reg.exe" export $regPath $backup /y 2>&1 | Out-Null
-                if ($LASTEXITCODE -ne 0) { Write-Status Warn "Backup failed for $($item.Name) - skipped."; $failed++; continue }
-                try {
-                    Remove-Item -LiteralPath $item.Key -Recurse -Force -ErrorAction Stop
-                    [void]$manifest.Add(@{ Type = 'Key'; Path = $item.Key; Backup = $backup })
-                    Write-Status OK "Removed: $($item.Name)"
-                    $removed++
-                } catch { Write-Status Fail "Could not remove $($item.Name): $($_.Exception.Message)"; $failed++ }
-            }
-            'Value' {
-                $backup = Join-Path $runDir ("{0:d3}_value.reg" -f $n)
-                $regPath = ($item.Key -replace '^.*Registry::', '') -replace '^HKLM:', 'HKEY_LOCAL_MACHINE' -replace '^HKCU:', 'HKEY_CURRENT_USER'
-                & "$env:SystemRoot\System32\reg.exe" export $regPath $backup /y 2>&1 | Out-Null
-                if ($LASTEXITCODE -ne 0) { Write-Status Warn "Backup failed for $($item.Name) - skipped."; $failed++; continue }
-                try {
-                    Remove-ItemProperty -LiteralPath $item.Key -Name $item.Name -ErrorAction Stop
-                    [void]$manifest.Add(@{ Type = 'Value'; Key = $item.Key; Name = $item.Name; Backup = $backup })
-                    Write-Status OK "Removed: $($item.Name)"
-                    $removed++
-                } catch { Write-Status Fail "Could not remove $($item.Name): $($_.Exception.Message)"; $failed++ }
-            }
-            'File' {
-                try {
-                    $fileBackup = Join-Path (Join-Path $FileBackupRoot $stamp) $item.Name
-                    New-Item -ItemType Directory -Path (Split-Path $fileBackup -Parent) -Force | Out-Null
-                    Copy-Item -LiteralPath $item.Key -Destination $fileBackup -Force -ErrorAction Stop
-                    Remove-Item -LiteralPath $item.Key -Force -ErrorAction Stop
-                    [void]$manifest.Add(@{ Type = 'File'; Path = $item.Key; Backup = $fileBackup })
-                    Write-Status OK "Removed: $($item.Name)"
-                    $removed++
-                } catch { Write-Status Fail "Could not remove $($item.Name): $($_.Exception.Message)"; $failed++ }
-            }
-        }
-    }
-    $manifestPath = Join-Path $runDir 'manifest.json'
-    ([pscustomobject]@{ Created = (Get-Date).ToString('o'); Removed = $removed; Failed = $failed; Items = @($manifest) } |
-        ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $manifestPath -Encoding UTF8
-    Write-Host ''
-    Write-Status OK "Registry care complete: $removed removed, $failed failed."
-    Write-Status Info "Backups: $runDir  (restore with menu option 7)"
+        $run.Status=if (@($run.Steps | Where-Object Status -eq 'Failed').Count) { 'CompletedWithErrors' } else { 'Completed' }
+        Save-SuiteJson $run.Path $run
+        $run.Steps | Format-Table Action,Status,Message -Wrap
+        Write-Status Info ("Recovery report: {0}" -f $run.Path)
+    } finally { $lock.ReleaseMutex(); $lock.Dispose() }
 }
-
 function Restore-LatestRegistryBackup {
+    Import-Module (Join-Path $PSScriptRoot '..\Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
+    $care=Get-SuiteHistory | Where-Object Mode -eq 'RegistryCare' | Select-Object -First 1
+    if ($care) { $undo=Invoke-SuiteUndo $care.Path; Write-Status Info $undo.Message; return }
     Assert-Admin
     $latest = Get-ChildItem -LiteralPath $RegBackupRoot -Directory -ErrorAction SilentlyContinue |
               Sort-Object Name -Descending | Select-Object -First 1
@@ -873,6 +860,7 @@ function Show-Menu {
     Write-Host ''
 }
 
+if ($Action -eq 'Library') { return }
 switch ($Action) {
     'SelfTest' { Invoke-SelfTest }
     'Scan'     { Initialize-State; Show-ScanReport | Out-Null; exit 0 }

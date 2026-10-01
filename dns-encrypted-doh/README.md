@@ -1,30 +1,37 @@
-﻿# Encrypted DNS Manager v2.1
+# Encrypted DNS Manager 2.2
 
-This folder configures Windows 11 DNS-over-HTTPS using official provider HTTPS templates.
+Windows 11 DNS-over-HTTPS using one provider per physical adapter. Use the [dashboard](../README.md) or `DNS_Encrypted_Manager.bat`. Extract the full toolkit, including `Modules\Network.State.psm1`.
 
-## Why v2.1 exists
+| Provider | IPv4 | HTTPS template |
+| --- | --- | --- |
+| Quad9 Secure | `9.9.9.9`, `149.112.112.112` | `https://dns.quad9.net/dns-query` |
+| AdGuard DNS | `94.140.14.14`, `94.140.15.15` | `https://dns.adguard-dns.com/dns-query` |
+| Mullvad legacy | Profile-specific | Official Mullvad templates until retirement |
 
-The old script mixed Quad9 and Mullvad on the same adapter. That split queries between providers with different filtering policies and made verification muddy. v2.1 chooses **one provider profile at a time**, registers a DoH template for every selected IPv4/IPv6 address, enables automatic encrypted upgrade, disables UDP fallback, and verifies the result.
+Matching IPv6 servers are registered; adapters receive them only with usable IPv6 and a default IPv6 route. Quad9 is the recommended ongoing profile. [Quad9](https://docs.quad9.net/services/), [AdGuard](https://adguard-dns.io/en/public-dns.html).
 
-## Launchers
+**Mullvad public DNS retires November 2, 2026.** New Mullvad applies are blocked from then onward; backup restore remains available. [Official announcement](https://mullvad.net/en/blog/2026/9/3/shutting-down-our-public-encrypted-dns-servers-and-sponsoring-quad9-instead).
 
-- `DNS_Encrypted_Manager.bat`: opens the provider menu
-- `DNS_Set_Quad9_Mullvad.bat`: opens the provider menu, retained for compatibility
-- `DNS_Set_Quad9.bat`: applies Quad9 Secure
-- `DNS_Set_Mullvad_AdBlock.bat`: applies Mullvad AdBlock
-- `DNS_Revert_DHCP.bat`: returns active adapters to automatic/DHCP DNS
-- `DNS_Restore_Previous.bat`: restores the exact previous snapshot
+## Correctness
 
-The DHCP reset is transactional: if it fails, the pre-reset state is restored automatically. New snapshots record whether each adapter used automatic/DHCP DNS or explicit static DNS, so restore does not accidentally turn DHCP-provided addresses into permanent static addresses.
+- Update existing DoH entries in place; automatic upgrade on, UDP fallback off.
+- Save affected DoH entries and IPv4/IPv6 static/automatic modes before writing.
+- Select physical adapters with default routes or an explicit physical index; exclude VPN/virtual adapters.
+- Restore by GUID even if indexes changed. Missing original adapters abort before DNS changes.
+- Verify addresses, flags, templates and resolution. Quad9 also requires its live TXT result to report `doh`; unavailable tests fail.
+- Attempt rollback after failed apply and report rollback failures.
+- Automatic DNS preserves global DoH entries used by other adapters.
 
-Snapshots are stored in `%ProgramData%\WindowsPCToolkit\EncryptedDNS\Snapshots`. Legacy v2.0 snapshots remain readable, but only v2.1 schema-3 snapshots contain DNS-mode metadata.
+AdGuard/Mullvad checks validate configuration/resolution without claiming Quad9's live attestation. DoH does not change public IP or replace a VPN.
 
-## Verification
+Snapshots: `%ProgramData%\WindowsPCToolkit\EncryptedDNS\Snapshots`. Schema 4 tracks affected encryption entries. Schema 2/3 backups with stable adapter identity remain readable; only backups that recorded mode can restore automatic/static exactly.
 
-The tool checks that each IP has the expected `https://.../dns-query` template, `AutoUpgrade` is enabled, and plaintext UDP fallback is disabled. Quad9 additionally supports a live TXT test that reports `doh` when the active transport is HTTPS.
+```powershell
+.\DNS_Manager.ps1 -Action Quad9 -InterfaceIndex 12
+.\DNS_Manager.ps1 -Action AdGuard -InterfaceIndex 12
+.\DNS_Manager.ps1 -Action Verify -InterfaceIndex 12
+.\DNS_Manager.ps1 -Action Restore
+.\DNS_Manager.ps1 -Action DHCP -InterfaceIndex 12
+```
 
-Mullvad profiles are configuration-verified because they do not publish the same Windows TXT protocol test. The tool does not falsely report a live transport result it cannot prove.
-
-## Important
-
-An IP address alone is not encrypted DNS. Windows must have the matching DoH HTTPS template and must not fall back to UDP port 53. Encrypted DNS hides DNS lookups from the local network path; it does not replace a VPN or change the public IP address.
+Replace `12` with your physical adapter index. Historical `DNS_Set_Quad9_Mullvad.bat` opens the menu, never a mixed profile.

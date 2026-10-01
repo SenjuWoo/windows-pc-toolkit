@@ -1,4 +1,4 @@
-# PC Privacy Guard v2.0
+# PC Privacy Guard v2.1
 
 A reversible Windows 10/11 privacy tool with two clearly separated profiles.
 
@@ -27,8 +27,10 @@ Undo restores those values. It does not delete whole Edge, Chrome, Firefox, or W
 
 ## Encrypted DNS
 
-Use the included `Optional DNS\DNS_Manager.ps1` for Windows 11 DNS-over-HTTPS. DoH encrypts DNS lookups on the network path. It does not change your public IP; a VPN is the tool that changes the address websites see.
+Use the dashboard or root `dns-encrypted-doh\DNS_Manager.ps1` for Windows 11 DNS-over-HTTPS. DoH encrypts DNS lookups on the network path. It does not change your public IP; a VPN is the tool that changes the address websites see.
 
 ## Launch
 
 Double-click `Run_As_Admin.bat`, accept UAC, and choose Balanced or individual controls. Reboot after Strict mode.
+
+In 2.1, unreadable registry state aborts snapshot creation rather than recording a missing value and risking an incorrect undo. Keep the full toolkit extracted together.

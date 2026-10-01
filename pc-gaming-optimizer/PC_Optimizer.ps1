@@ -10,6 +10,7 @@ while ($true) {
     Write-Host ('  HAGS       : {0}' -f (Get-HagsState))
     Write-Host ('  Power plan : {0}' -f (Get-ActivePowerSchemeGuid))
     Write-Host ''
+    Write-Host '  [A] Open the Toolkit Dashboard  One-click optimization + debloat + recovery' -ForegroundColor Green
     Write-Host '  SAFE PROFILES' -ForegroundColor Cyan
     Write-Host '  [1] Safe Gaming Profile        Game Mode, optional capture disable'
     Write-Host '  [2] HAGS Manager               Enable, disable, or keep current'
@@ -38,6 +39,7 @@ while ($true) {
     $choice=(Read-Host '  Select').Trim().ToUpperInvariant()
     try {
         switch ($choice) {
+            'A' { & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path (Split-Path $PSScriptRoot -Parent) 'Toolkit.ps1') }
             '1' { $cap=Read-Host '  Disable background recording/captures too? (y/N)'; Invoke-SafeGamingProfile -DisableCaptures:($cap -match '^[Yy]$') }
             '2' { Invoke-HagsManager }
             '3' { Invoke-InputProfile }

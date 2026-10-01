@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    PC Corruption Fixer v7.1.2 - Advanced system repair and diagnostics toolkit.
+    PC Corruption Fixer v7.2 - Advanced system repair and diagnostics toolkit.
 .DESCRIPTION
     Repairs corrupted system files, fixes Windows Update safely, clears caches,
     resets networking, deep-cleans components, checks disk health, manages
@@ -88,7 +88,7 @@ $ProgressPreference = 'SilentlyContinue'
 #  CONFIGURATION
 # ============================================================================
 
-$Script:Version    = '7.1.2'
+$Script:Version    = '7.2'
 $Script:LogDir     = "$env:USERPROFILE\Desktop"
 $Script:LogName    = "PC_Fixer_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 $Script:LogPath    = Join-Path $Script:LogDir $Script:LogName
@@ -709,23 +709,15 @@ function Invoke-SfcScan {
         if ($Total -eq 0) { Disable-StayAwake }  # standalone menu item releases; Full Repair holds
     }
 
+    # SFC's localized output is the integrity verdict; a guessed exit-code
+    # mapping must not turn a completed command into a claim of repaired files.
+    Write-Host $result.Output
     if ($result.ExitCode -eq 0) {
-        Write-Status OK 'SFC completed - no integrity violations found.'
-        $Script:Results['SFC'] = 'PASS - No violations'
-    } elseif ($result.ExitCode -eq 1) {
-        Write-Status OK 'SFC found and repaired corrupted files.'
-        $Script:Results['SFC'] = 'PASS - Corruptions repaired'
-    } elseif ($result.ExitCode -eq 2) {
-        Write-Status Warn 'SFC could not perform the requested operation - the scan did not complete.'
-        $Script:Results['SFC'] = 'WARN - SFC could not run'
-        $Script:HasFailure = $true
-    } elseif ($result.ExitCode -eq 3) {
-        Write-Status Fail 'SFC found errors but could NOT fix all of them.'
-        $Script:Results['SFC'] = 'WARN - Some files could not be repaired'
-        $Script:HasFailure = $true
+        Write-Status OK 'SFC command completed. Review its output above for the integrity verdict.'
+        $Script:Results['SFC'] = 'COMPLETED - Review SFC output'
     } else {
-        Write-Status Fail "SFC exited with code $($result.ExitCode)."
-        $Script:Results['SFC'] = "FAIL - Exit code $($result.ExitCode)"
+        Write-Status Warn "SFC exited with code $($result.ExitCode). Review its output and CBS.log."
+        $Script:Results['SFC'] = "ATTENTION - Exit code $($result.ExitCode)"
         $Script:HasFailure = $true
     }
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
@@ -737,72 +729,34 @@ function Invoke-SfcScan {
 
 function Invoke-DismRepair {
     param([int]$Step = 0, [int]$Total = 0)
-
     if ($Total -gt 0) { Write-StepHeader 'DISM - Component Store Repair' $Step $Total }
     else { Write-StepHeader 'DISM - Component Store Repair' }
-
-    Write-Status Info 'Checking CBS log for unrepaired corruption...'
-
-    $cbsPath = "$env:SystemRoot\Logs\CBS\CBS.log"
-    $runDism = $false
-    if (Test-Path $cbsPath) {
-        try {
-            # -Tail reads only the end of the file (CBS.log can be hundreds of MB)
-            $cbsTail = Get-Content $cbsPath -Tail 300 -EA Stop | Out-String
-            if ($cbsTail -match 'Cannot repair|hash mismatch|Repair failed|cannot fix|could not reproject') {
-                $runDism = $true
-            }
-        } catch { $runDism = $true }
-    } else { $runDism = $true }
-
-    if ($runDism) {
-        Write-Status Info 'Corruption detected. Running DISM /RestoreHealth...'
-        Write-Status Info 'Downloads clean files from Windows Update (5-15 min). Sleep blocked.'
-        Write-Host ''
-
-        Enable-StayAwake
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        try {
-            $dismResult = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/RestoreHealth'
-
-            if ($dismResult.ExitCode -ne 0) {
-                Write-Status Warn 'Online repair failed. Trying /LimitAccess (local sources)...'
-                $dismResult = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/RestoreHealth', '/LimitAccess'
-            }
-        } finally {
-            $sw.Stop()
-            if ($Total -eq 0) { Disable-StayAwake }
-        }
-
-        if ($dismResult.ExitCode -eq 0) {
-            Write-Status OK 'DISM repair succeeded.'
-            $Script:Results['DISM'] = 'PASS - Repaired'
-        } else {
-            Write-Status Fail "DISM failed with exit code $($dismResult.ExitCode)."
-            $Script:Results['DISM'] = "FAIL - Exit code $($dismResult.ExitCode)"
-            $Script:HasFailure = $true
-        }
-
-        if ($dismResult.ExitCode -eq 0) {
-            Write-Host ''
-            Write-Status Info 'Re-running SFC to verify DISM repairs...'
-            if ($Total -eq 0) { Enable-StayAwake }  # standalone run: keep sleep blocked across the verification scan too
-            $sfcCheck = Invoke-Native -FilePath 'sfc.exe' -ArgumentList '/scannow'
-            if ($Total -eq 0) { Disable-StayAwake }
-            if ($sfcCheck.ExitCode -eq 0 -or $sfcCheck.ExitCode -eq 1) {
-                Write-Status OK 'Post-DISM SFC verification passed.'
-                $Script:Results['Post-SFC'] = 'PASS'
-            } else {
-                Write-Status Warn "Post-DISM SFC exit code: $($sfcCheck.ExitCode)"
-                $Script:Results['Post-SFC'] = 'WARN - Some issues remain'
-            }
-        }
-
-        Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
-    } else {
-        Write-Status OK 'No unrepaired corruption found in CBS log. DISM skipped.'
-        $Script:Results['DISM'] = 'SKIP - Not needed'
+    $pending=Test-PendingReboot
+    if ($pending.Pending -and @($pending.Reasons | Where-Object { $_ -in @('Windows Update','Component Based Servicing') }).Count) {
+        Write-Status Warn 'Finish the pending Windows restart before component-store repair.'
+        $Script:Results['DISM']='SKIP - Update restart pending'
+        return
     }
+    Write-Status Info 'Running DISM /RestoreHealth before SFC; downloads repair files when needed.'
+    Enable-StayAwake
+    $sw=[Diagnostics.Stopwatch]::StartNew()
+    try {
+        $result=Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online','/Cleanup-Image','/RestoreHealth'
+        Write-Host $result.Output
+        if ($result.ExitCode -in @(0,3010)) {
+            Write-Status OK 'DISM command completed. Review its output for the repair verdict.'
+            $Script:Results['DISM']='COMPLETED - Review DISM output'
+            if ($result.ExitCode -eq 3010) { Write-Status Warn 'Windows requests a restart. No automatic restart will occur.' }
+        } else {
+            Write-Status Fail "DISM exited with code $($result.ExitCode). Review its output before continuing."
+            $Script:Results['DISM']="FAIL - Exit code $($result.ExitCode)"
+            $Script:HasFailure=$true
+        }
+    } finally {
+        $sw.Stop()
+        if ($Total -eq 0) { Disable-StayAwake }
+    }
+    Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 }
 
 # ============================================================================
@@ -823,39 +777,11 @@ function Invoke-CacheCleanup {
         Write-Status OK 'DNS resolver cache flushed.'
     } catch { Write-Status Warn 'DNS flush skipped.' }
 
-    # Temp files (single enumeration; -LiteralPath so files with [] in the
-    # name don't get skipped by wildcard expansion)
-    $tempPaths = @($env:TEMP, "$env:SystemRoot\Temp")
-    $totalTempFiles = 0
-    $totalTempRemoved = 0
-    foreach ($tp in $tempPaths) {
-        try {
-            if (Test-Path -LiteralPath $tp) {
-                $files = @(Get-ChildItem -LiteralPath $tp -Recurse -File -Force -EA SilentlyContinue)
-                $removed = 0
-                $freedBytes = [long]0
-                foreach ($f in $files) {
-                    try {
-                        Remove-Item -LiteralPath $f.FullName -Force -EA Stop
-                        $removed++
-                        $freedBytes += $f.Length
-                    } catch { }   # file in use - leave it
-                }
-                # Remove now-empty subfolders (deepest first)
-                Get-ChildItem -LiteralPath $tp -Recurse -Directory -Force -EA SilentlyContinue |
-                    Sort-Object { $_.FullName.Length } -Descending |
-                    ForEach-Object {
-                        if (-not (Get-ChildItem -LiteralPath $_.FullName -Force -EA SilentlyContinue)) {
-                            Remove-Item -LiteralPath $_.FullName -Force -EA SilentlyContinue
-                        }
-                    }
-                $totalTempFiles += $files.Count
-                $totalTempRemoved += $removed
-                $freedMB = [math]::Round($freedBytes / 1MB, 1)
-                Write-Status OK "Temp files cleaned ($removed of $($files.Count) files, $freedMB MB freed) - $tp"
-            }
-        } catch { Write-Status Warn "Temp cleanup had errors at $tp (files in use)." }
-    }
+    # Reuse the suite's age, protected-data and link guards in every repair path.
+    try {
+        Import-Module (Join-Path $PSScriptRoot '..\Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
+        Write-Status OK (Invoke-SuiteTempCleanup)
+    } catch { Write-Status Warn ('Temp cleanup skipped: '+$_.Exception.Message) }
 
     # Thumbnail cache
     try {
@@ -913,29 +839,16 @@ function Invoke-CacheCleanup {
 
 function Get-StaticNetworkDnsServers {
     param([Parameter(Mandatory)]$Adapter)
-    $guid = $Adapter.InterfaceGuid.ToString().Trim('{}')
-    $paths = @{
-        IPv4 = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{$guid}"
-        IPv6 = "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\{$guid}"
-    }
-    $result = [ordered]@{ IPv4 = @(); IPv6 = @() }
-    foreach ($family in @('IPv4','IPv6')) {
-        $raw = ''
-        try { $raw = [string](Get-ItemPropertyValue -LiteralPath $paths[$family] -Name 'NameServer' -EA Stop) } catch { }
-        if (-not [string]::IsNullOrWhiteSpace($raw)) {
-            $result[$family] = @($raw -split '[,;\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        }
-    }
-    [PSCustomObject]$result
+    Import-Module (Join-Path $PSScriptRoot '..\Modules\Network.State.psm1') -DisableNameChecking
+    Get-AdapterStaticDnsServers -Adapter $Adapter
 }
-
 function Backup-NetworkDnsState {
     try {
         $stateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\NetworkSnapshots'
         if (-not (Test-Path -LiteralPath $stateRoot)) { New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null }
         # Snapshot every adapter, not just ones currently Up - a TCP/IP reset at reboot also affects disconnected adapters.
-        $adapters = foreach ($adapter in Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.Name -notmatch 'Loopback' }) {
-            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -EA SilentlyContinue
+        $adapters = foreach ($adapter in Get-NetAdapter -EA Stop | Where-Object { $_.Name -notmatch 'Loopback' }) {
+            $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -EA Stop
             $static = Get-StaticNetworkDnsServers -Adapter $adapter
             [PSCustomObject]@{
                 InterfaceIndex = $adapter.ifIndex
@@ -948,9 +861,10 @@ function Backup-NetworkDnsState {
                 EffectiveIPv6 = @(($dns | Where-Object AddressFamily -eq 23).ServerAddresses | Where-Object { $_ })
             }
         }
+        if (@($adapters).Count -eq 0) { throw 'No adapters could be backed up.' }
         $doh = @()
-        if (Get-Command Get-DnsClientDohServerAddress -EA SilentlyContinue) {
-            $doh = @(Get-DnsClientDohServerAddress -EA SilentlyContinue | ForEach-Object {
+        if (Get-Command Get-DnsClientDohServerAddress -EA Stop) {
+            $doh = @(Get-DnsClientDohServerAddress -EA Stop | ForEach-Object {
                 [PSCustomObject]@{
                     ServerAddress = $_.ServerAddress
                     DohTemplate = $_.DohTemplate
@@ -974,43 +888,34 @@ function Restore-NetworkDnsState {
     param([string]$Path)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
     try {
+        Import-Module (Join-Path $PSScriptRoot '..\Modules\Network.State.psm1') -Force -DisableNameChecking
         $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
         foreach ($adapter in @($snapshot.Adapters)) {
-            if (-not (Get-NetAdapter -InterfaceIndex ([int]$adapter.InterfaceIndex) -EA SilentlyContinue)) { continue }
+            $current=Get-NetAdapter -EA Stop | Where-Object { $_.InterfaceGuid.ToString().Trim('{}') -eq $adapter.InterfaceGuid.ToString().Trim('{}') } | Select-Object -First 1
+            if (-not $current) { throw "Original adapter no longer exists: $($adapter.Name)" }
             if ($adapter.PSObject.Properties.Name -contains 'Automatic') {
-                if ([bool]$adapter.Automatic) {
-                    Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ResetServerAddresses -EA Stop
-                    Write-Status OK "Restored automatic/DHCP DNS on $($adapter.Name)."
-                } else {
-                    $addresses = @($adapter.StaticIPv4) + @($adapter.StaticIPv6) | Where-Object { $_ }
-                    if ($addresses.Count -eq 0) { throw "Snapshot for $($adapter.Name) says static DNS but contains no static addresses." }
-                    Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ServerAddresses $addresses -EA Stop
-                    Write-Status OK "Restored static DNS on $($adapter.Name): $($addresses -join ', ')"
-                }
+                Set-AdapterDnsFamilies -Index $current.ifIndex -IPv4 @($adapter.StaticIPv4) -IPv6 @($adapter.StaticIPv6)
+                $actual=Get-StaticNetworkDnsServers -Adapter $current
+                if ((@($actual.IPv4) -join ',') -ne (@($adapter.StaticIPv4) -join ',') -or (@($actual.IPv6) -join ',') -ne (@($adapter.StaticIPv6) -join ',')) { throw "DNS restore verification failed for $($adapter.Name)." }
             } else {
-                $addresses = @($adapter.IPv4) + @($adapter.IPv6) | Where-Object { $_ }
-                if ($addresses.Count -gt 0) { Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ServerAddresses $addresses -EA Stop }
-                else { Set-DnsClientServerAddress -InterfaceIndex ([int]$adapter.InterfaceIndex) -ResetServerAddresses -EA Stop }
-                Write-Status Warn "Restored $($adapter.Name) from a legacy snapshot that did not record DHCP/static mode."
+                Set-AdapterDnsFamilies -Index $current.ifIndex -IPv4 @($adapter.IPv4) -IPv6 @($adapter.IPv6)
+                Write-Status Warn "Legacy snapshot for $($adapter.Name) does not record DHCP/static mode."
             }
         }
-        if (Get-Command Add-DnsClientDohServerAddress -EA SilentlyContinue) {
-            foreach ($entry in @($snapshot.DoH)) {
-                $current = Get-DnsClientDohServerAddress -ServerAddress $entry.ServerAddress -EA SilentlyContinue
-                if (-not $current -or $current.DohTemplate -ne $entry.DohTemplate -or [bool]$current.AllowFallbackToUdp -ne [bool]$entry.AllowFallbackToUdp -or [bool]$current.AutoUpgrade -ne [bool]$entry.AutoUpgrade) {
-                    Remove-DnsClientDohServerAddress -ServerAddress $entry.ServerAddress -EA SilentlyContinue
-                    Add-DnsClientDohServerAddress -ServerAddress $entry.ServerAddress -DohTemplate $entry.DohTemplate -AllowFallbackToUdp ([bool]$entry.AllowFallbackToUdp) -AutoUpgrade ([bool]$entry.AutoUpgrade) -EA Stop
-                }
-            }
+        foreach ($entry in @($snapshot.DoH)) {
+            $current=Get-DnsClientDohServerAddress -EA Stop | Where-Object ServerAddress -eq $entry.ServerAddress | Select-Object -First 1
+            $dohParameters=@{ServerAddress=$entry.ServerAddress;DohTemplate=$entry.DohTemplate;AllowFallbackToUdp=[bool]$entry.AllowFallbackToUdp;AutoUpgrade=[bool]$entry.AutoUpgrade;ErrorAction='Stop'}
+            if ($current) { Set-DnsClientDohServerAddress @dohParameters } else { Add-DnsClientDohServerAddress @dohParameters }
+            $verified=Get-DnsClientDohServerAddress -EA Stop | Where-Object ServerAddress -eq $entry.ServerAddress | Select-Object -First 1
+            if (-not $verified -or $verified.DohTemplate -ne $entry.DohTemplate -or [bool]$verified.AllowFallbackToUdp -ne [bool]$entry.AllowFallbackToUdp -or [bool]$verified.AutoUpgrade -ne [bool]$entry.AutoUpgrade) { throw "DoH restore verification failed for $($entry.ServerAddress)." }
         }
-        Write-Status OK 'Adapter DNS mode and registered DoH templates restored.'
+        Write-Status OK 'Adapter DNS modes and DoH templates restored and verified.'
         return $true
     } catch {
         Write-Status Warn "DNS restore had an error: $_"
         return $false
     }
 }
-
 function Invoke-NetworkHealthRefresh {
     param([int]$Step = 0, [int]$Total = 0)
     if ($Total -gt 0) { Write-StepHeader 'Network Health + DNS Refresh' $Step $Total }
@@ -1244,80 +1149,69 @@ function Invoke-DiskCheck {
 
 function Invoke-WindowsUpdateRepair {
     Write-StepHeader 'Repair Windows Update Components'
-    Write-Status Warn 'Use this only when Windows Update is actually stuck or failing.'
-    Write-Status Info 'Installed updates are preserved, but rebuilding SoftwareDistribution can reset the visible local update-history list.'
-    Write-Host ''
-
-    $pbr = Test-PendingReboot
-    if ($pbr.Pending -and ($pbr.Reasons -contains 'Windows Update' -or $pbr.Reasons -contains 'Component Based Servicing')) {
-        Write-Status Warn 'An update appears to be mid-install and a reboot is pending.'
-        Write-Status Info 'Reboot first. Resetting update caches mid-install can damage servicing state.'
-        $Script:Results['WinUpdate'] = 'SKIP - Reboot pending'
+    Write-Status Info 'Rebuilds update caches only on request. Installed updates and timestamped cache backups are retained.'
+    $pending=Test-PendingReboot
+    if ($pending.Pending -and @($pending.Reasons | Where-Object { $_ -in @('Windows Update','Component Based Servicing') }).Count) {
+        Write-Status Warn 'Finish the pending Windows restart before rebuilding update caches.'
+        $Script:Results['WinUpdate']='SKIP - Reboot pending'
         return
     }
-
-    $confirm = Read-Host '  Rebuild Windows Update caches now? (y/N)'
-    if ($confirm -notmatch '^[Yy]$') {
-        Write-Status Skip 'Windows Update repair cancelled.'
-        $Script:Results['WinUpdate'] = 'SKIP - Cancelled'
+    if ((Read-Host '  Rebuild Windows Update caches now? (y/N)') -notmatch '^[Yy]$') {
+        $Script:Results['WinUpdate']='SKIP - Cancelled'
         return
     }
-
+    $services=@('bits','wuauserv','cryptsvc','DoSvc')
+    $initial=@{}
+    $renamed=0; $required=0; $errors=New-Object Collections.ArrayList
+    $stamp=Get-Date -Format 'yyyyMMdd_HHmmss_fff'
     Enable-StayAwake
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $services = @('bits','wuauserv','cryptsvc','DoSvc')
-    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $renamed = @()
+    $sw=[Diagnostics.Stopwatch]::StartNew()
     try {
-        Write-Status Step 'Stopping update services...'
+        # Read every original state before stopping anything. A stop failure
+        # aborts cache mutation; finally restores only originally running services.
+        foreach ($name in $services) { $initial[$name]=[string](Get-Service -Name $name -ErrorAction Stop).Status }
         foreach ($name in $services) {
-            try {
-                $svc = Get-Service -Name $name -EA SilentlyContinue
-                if ($svc -and $svc.Status -eq 'Running') {
-                    Stop-Service -Name $name -Force -EA Stop
-                    $svc.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(15))
-                }
-                Write-Status OK "$name ready."
-            } catch { Write-Status Warn "Could not fully stop ${name}: $($_.Exception.Message)" }
-        }
-
-        foreach ($folder in @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\System32\catroot2")) {
-            if (-not (Test-Path -LiteralPath $folder)) { continue }
-            $backup = "$folder.pcfixer.$stamp"
-            try {
-                Rename-Item -LiteralPath $folder -NewName (Split-Path -Leaf $backup) -EA Stop
-                $renamed += $backup
-                Write-Status OK "Rebuilt $(Split-Path -Leaf $folder); old cache retained as $(Split-Path -Leaf $backup)."
-            } catch {
-                Write-Status Warn "Could not rename $(Split-Path -Leaf $folder): $($_.Exception.Message)"
+            if ($initial[$name] -eq 'Running') {
+                Stop-Service -Name $name -Force -ErrorAction Stop
+                (Get-Service -Name $name -ErrorAction Stop).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(15))
             }
+            if ((Get-Service -Name $name -ErrorAction Stop).Status -ne 'Stopped') { throw "$name is not stopped; cache rebuild aborted." }
         }
-
-        $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
-        Write-Status OK 'DNS cache refreshed; adapter DNS and DoH settings preserved.'
+        foreach ($folder in @("$env:SystemRoot\SoftwareDistribution","$env:SystemRoot\System32\catroot2")) {
+            if (-not (Test-Path -LiteralPath $folder -ErrorAction Stop)) { continue }
+            $required++
+            $item=Get-Item -LiteralPath $folder -Force -ErrorAction Stop
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Cache folder is a link; rebuild aborted: $folder" }
+            $backup="$folder.pcfixer.$stamp"
+            Rename-Item -LiteralPath $folder -NewName (Split-Path -Leaf $backup) -ErrorAction Stop
+            if (Test-Path -LiteralPath $folder -ErrorAction Stop) { throw "Cache rename did not complete: $folder" }
+            if (-not (Test-Path -LiteralPath $backup -ErrorAction Stop)) { throw "Cache backup is missing: $backup" }
+            $renamed++
+            Write-Status OK "Cache retained for recovery: $backup"
+        }
+    } catch {
+        [void]$errors.Add($_.Exception.Message)
+        Write-Status Fail $_.Exception.Message
     } finally {
-        Write-Status Step 'Starting update services...'
-        foreach ($name in @('cryptsvc','bits','wuauserv','DoSvc')) {
-            Start-Service -Name $name -EA SilentlyContinue
-            Write-Status OK "$name start requested."
+        foreach ($name in $services) {
+            if ($initial.ContainsKey($name) -and $initial[$name] -eq 'Running') {
+                try {
+                    Start-Service -Name $name -ErrorAction Stop
+                    (Get-Service -Name $name -ErrorAction Stop).WaitForStatus('Running',[TimeSpan]::FromSeconds(15))
+                    Write-Status OK "$name restored to Running."
+                } catch { [void]$errors.Add("Service restore ${name}: $($_.Exception.Message)"); Write-Status Fail $errors[$errors.Count-1] }
+            }
         }
         Disable-StayAwake
         $sw.Stop()
     }
-
-    $uso = Resolve-SystemTool 'UsoClient.exe'
-    if ($uso) {
-        try { Start-Process -FilePath $uso -ArgumentList 'StartScan' -WindowStyle Hidden -EA SilentlyContinue | Out-Null; Write-Status OK 'Windows Update scan requested.' }
-        catch { Write-Status Info 'Open Settings > Windows Update and select Check for updates.' }
-    }
-    if ($renamed.Count -eq 0) {
-        Write-Status Warn 'No update cache folder was rebuilt. Review the log and run the read-only health check.'
-        $Script:Results['WinUpdate'] = 'WARN - Cache rebuild incomplete'
+    if ($errors.Count -or $required -eq 0 -or $renamed -ne $required) {
+        $Script:Results['WinUpdate']="ATTENTION - $renamed cache(s) rebuilt; review errors and retained backups"
+        $Script:HasFailure=$true
     } else {
-        Write-Status OK 'Windows Update cache rebuild complete.'
-        $Script:Results['WinUpdate'] = 'PASS - Update caches rebuilt'
+        $Script:Results['WinUpdate']='COMPLETED - Update caches rebuilt; check Windows Update'
+        Write-Status OK 'Cache rebuild completed. Open Settings > Windows Update and check for updates.'
     }
-    Write-Status Info 'Old cache folders are retained for manual recovery and can be deleted later after updates work normally.'
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 }
 
@@ -1332,8 +1226,8 @@ function Invoke-CreateRestorePoint {
 
     # Enable System Restore if disabled
     try {
-        Enable-ComputerRestore -Drive 'C:\' -EA Stop
-        Write-Status OK 'System Restore enabled on C:.'
+        Enable-ComputerRestore -Drive ($env:SystemDrive+'\') -EA Stop
+        Write-Status OK ('System Restore enabled on '+$env:SystemDrive+'.')
     } catch {
         Write-Status Warn ("Could not enable System Restore (it may be disabled by policy): {0}" -f $_.Exception.Message)
     }
@@ -2602,14 +2496,20 @@ function Invoke-OrphanServiceScan {
 # ============================================================================
 
 function Invoke-FullRepair {
+    $pending=Test-PendingReboot
+    if ($pending.Pending -and @($pending.Reasons | Where-Object { $_ -in @('Windows Update','Component Based Servicing') }).Count) {
+        Write-Status Warn 'Finish the pending Windows restart before Full Repair.'
+        $Script:Results['FullRepair']='SKIP - Update restart pending'
+        return
+    }
     Write-StepHeader 'FULL REPAIR - Complete System Fix'
     Write-Status Info 'This will run all standard repair operations.'
     Write-Status Info 'Sleep is blocked for the whole Full Repair (sleep-free).'
     Write-Host ''
 
     $steps = @(
-        @{ Name = 'SFC - System File Check';        Func = 'sfc' },
         @{ Name = 'DISM - Component Store Repair';   Func = 'dism' },
+        @{ Name = 'SFC - System File Check';        Func = 'sfc' },
         @{ Name = 'Cache Cleanup (Safe)';            Func = 'caches' },
         @{ Name = 'Network Health + DNS Refresh';      Func = 'networkhealth' },
         @{ Name = 'Disk Health - Online Scan';       Func = 'chkdsk' }
@@ -2903,7 +2803,7 @@ function Main {
 
         switch ($sel) {
             '1'  { Invoke-FullRepair }
-            '2'  { Invoke-SfcScan; Invoke-DismRepair }
+            '2'  { Invoke-DismRepair; Invoke-SfcScan }
             '3'  { $rb = Read-Host '  Also empty the Recycle Bin? (y/N)'; Invoke-CacheCleanup -IncludeRecycleBin:($rb -match '^[Yy]$') }
             '4'  { Invoke-NetworkReset }
             '5'  { Invoke-DeepCleanup }

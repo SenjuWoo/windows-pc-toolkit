@@ -1,107 +1,23 @@
-﻿# PC Corruption Fixer v7.1.2
+# PC Corruption Fixer 7.2
 
-A Windows 10/11 repair and diagnostic toolkit built around official Windows tools, detailed logs, and conservative defaults.
+Official Windows repair and diagnostics with logs, explicit advanced choices and retained backups. Use [Repair & tools in the dashboard](../README.md) or `Fix_Corruption.bat`. Keep the complete toolkit extracted together.
 
-## Major v7.1 / 7.1.1 fixes
+## Repair workflow
 
-### Hotfix 7.1.1
+The dashboard runs **DISM /RestoreHealth → SFC /scannow**, saves native output and exit codes, blocks pending update restarts and never forces reboot. This follows [Microsoft's repair sequence](https://support.microsoft.com/en-us/topic/use-the-system-file-checker-tool-to-repair-missing-or-corrupted-system-files-79aa86cb-ca52-166a-92a3-966e85d4094e).
 
-- Fixed a PowerShell parser failure from an unbraced variable followed by a colon in a catch message (${name}:).
+The console's Full Repair adds guarded aged-temp/cache cleanup, DNS cache/connectivity refresh and online disk checks. It does not reset Winsock/TCP/IP/firewall or alter adapter DNS. SFC's actual output supplies the corruption verdict; no guessed numeric exit mapping claims files were repaired.
 
-### Fixes 7.1.2 (deep-review pass)
+## Windows Update repair
 
-- SFC exit codes are mapped correctly (1 = repaired, 2 = could not run). Previously a scan that could not run was reported as "repaired", and a successful repair was reported as a failure.
-- Post-DISM verification accepts a repaired scan and keeps the sleep block held during the verification pass.
-- Store re-register counts real successes and reports failures instead of a fixed PASS.
-- Time-sync repair verifies `w32tm /register` and reports a missing W32Time service instead of claiming success.
-- Orphan-service removal exports a registry backup before `sc delete` and refuses to delete when the backup fails.
-- Startup-Viewer TEMP-path warning and `\\?\` device-path handling fixed (both regexes could never match).
-- AI privacy snapshots abort cleanly on failure; partial restores are reported as partial.
-- Restore-point, DISM CheckHealth, component-cleanup and event-scan messages no longer overclaim.
-- Six unused display helpers removed.
+Run only for an update fault, from the explicit console option. Pending servicing/update restarts block it. It records service states, requires every relevant service to stop before touching caches, retains timestamped SoftwareDistribution/catroot2 folders, checks each rename and restores originally running services in `finally`. Stopped services stay stopped; startup types are not changed. Stop/restart/partial-cache failures are reported as needing attention. A rebuilt cache is not proof a subsequent update succeeds. Check Windows Update afterward. Local visible update history may be rebuilt; installed updates remain installed.
 
-### Disk scan failure fixed
+## Network and advanced tools
 
-The old Full Repair attempted `chkdsk.exe /scan` first. On some elevated systems, PowerShell rejected that native pipeline with **Access is denied** before CHKDSK completed. The script then used `Repair-Volume`, but the timer had already stopped, which produced a misleading `0.0s` result.
+Explicit Winsock reset is separate from Full Repair. Deeper TCP/IP reset needs its own confirmation because it can remove custom adapter configuration. Network backups abort on unreadable DNS/DoH state; restore uses adapter GUIDs and separately verifies IPv4/IPv6 automatic/static modes and existing DoH templates.
 
-v7.1 now:
+Other console tools: disk scan, Store/AppX repair, event logs, service/driver/startup diagnostics, time sync, disk-space analysis, performance counters, HTML report and reversible AI/browser privacy policies. AI policy support depends on Windows edition/build. ResetBase, service removal, strict policies and other advanced operations are separate choices.
 
-1. Uses `Repair-Volume -Scan` as the primary online disk scan.
-2. Falls back to `chkdsk /scan` only if the cmdlet cannot run.
-3. Keeps the stopwatch running through every fallback.
-4. Uses the actual Windows drive instead of hard-coding `C:`.
-5. Recommends `Repair-Volume -OfflineScanAndFix` when an offline repair is required.
+Console logs are written to the Desktop. Network/AI/service backups are under `%ProgramData%\WindowsPCToolkit\PCFixer`. Dashboard repair reports are in `WindowsPCToolkit\Suite\Runs`.
 
-### Full Repair is no longer a network reset
-
-Routine corruption repair should not reset Winsock, TCP/IP, firewall rules, DNS, or DoH. Full Repair now performs a non-destructive DNS refresh and connectivity check instead. The explicit **Network Stack Reset** remains available as menu option 4 for real network-stack failures.
-
-Before that explicit reset, v7.1 saves whether DNS was automatic or static, the static DNS addresses, and registered DNS-over-HTTPS templates under:
-
-`%ProgramData%\WindowsPCToolkit\PCFixer\NetworkSnapshots`
-
-Winsock reset is the default repair. The deeper TCP/IP reset is separately confirmed because it can remove custom static IP, gateway, VLAN, VPN, and adapter settings. After either path, the tool restores the recorded DNS mode and DoH templates, and it reports a failure instead of pretending rollback succeeded.
-
-### Reversible AI feature privacy
-
-Menu option 23 no longer removes Copilot/AI AppX packages, disables services, or turns off Windows Search. It applies a documented policy-only profile for Recall, Click to Do, Settings agentic search, Edge AI features, and local Edge/Chrome GenAI models. Before changing anything, it saves the exact registry state under:
-
-`%ProgramData%\WindowsPCToolkit\PCFixer\AIFeatureSnapshots`
-
-The same menu can restore the latest snapshot. A failed apply automatically rolls back. Windows may ignore particular enterprise policies on unsupported editions or older builds, so the tool reports policy application rather than pretending every AI component was uninstalled.
-
-### Other safety corrections
-
-- Recycle Bin deletion is separately opt-in and never part of Full Repair.
-- A stopped Windows Update service is reported as healthy when it is Manual/trigger-start, which is normal on current Windows versions.
-- Windows Update repair refreshes DNS but no longer resets Winsock.
-- Full Repair preserves firewall rules, adapter settings, DNS, DoH, static IP settings, and DHCP leases.
-
-## Full Repair sequence
-
-1. SFC system file scan
-2. Conditional DISM component-store repair
-3. Safe cache cleanup
-4. DNS refresh and network health test
-5. Online disk health scan
-
-## Menu tools
-
-- SFC and DISM repair
-- Safe temporary/cache cleanup
-- Explicit Winsock reset, with deeper TCP/IP reset separately confirmed and DNS/DoH rollback checked
-- DISM component cleanup, with irreversible ResetBase separately confirmed
-- Online disk health scan
-- Windows Update health check and repair
-- Microsoft Store/AppX repair
-- Critical service checks
-- Event log scan
-- Network diagnostics
-- Problem device scan
-- Disk space analysis
-- Startup viewer
-- Icon/thumbnail cache rebuild
-- Time synchronization repair
-- Performance counter repair
-- Orphaned service scan
-- Reversible AI feature privacy policy manager
-- HTML health report
-
-## Launch
-
-Double-click `Fix_Corruption.bat`, accept UAC, and select a menu option. Logs are written to the Desktop.
-
-## Safety notes
-
-- Native Windows executables are resolved from the trusted System32 directory.
-- Windows Update data is not deleted by cache cleanup.
-- TCP/IP reset, firewall reset, and DISM ResetBase are explicit opt-ins.
-- Network reset is not part of Full Repair.
-- A restore point is offered before Full Repair.
-- Read-only diagnostic items are labeled as such.
-
-## Requirements
-
-- Windows 10 or Windows 11
-- Administrator rights
-- Built-in Windows PowerShell 5.1 or newer
+Windows 10/11, administrator rights and built-in Windows PowerShell 5.1. General repair is logged maintenance rather than a reversible registry optimization.

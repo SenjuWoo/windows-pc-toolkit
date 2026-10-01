@@ -1,5 +1,5 @@
 @echo off
-title PC Privacy Guard v2.0
+title PC Privacy Guard v2.1
 setlocal EnableExtensions
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LOG=%LOCALAPPDATA%\Temp\PrivacyGuard_launch.log"

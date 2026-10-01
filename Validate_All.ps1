@@ -29,6 +29,8 @@ foreach($file in $files){
 
 Write-Host "`nChecking launchers..." -ForegroundColor Cyan
 foreach($bat in Get-ChildItem -LiteralPath $root -Recurse -Filter '*.bat' -File | Where-Object { -not (Test-IsNestedGithubPublish $_.FullName $root) }){
+    $bytes=[IO.File]::ReadAllBytes($bat.FullName)
+    if($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191){$failed=$true;Write-Host "[FAIL] Batch launcher has a UTF-8 BOM: $($bat.FullName)" -ForegroundColor Red}
     $text=Get-Content -LiteralPath $bat.FullName -Raw
     if($text -notmatch [regex]::Escape('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe')){$failed=$true;Write-Host "[FAIL] Launcher does not use absolute PowerShell path: $($bat.FullName)" -ForegroundColor Red}
     $bs=[string][char]92
@@ -43,7 +45,13 @@ foreach($required in @('https://dns.quad9.net/dns-query','https://dns.mullvad.ne
 foreach($required in @('9.9.9.9','149.112.112.112','2620:fe::fe','2620:fe::fe:9')){if($dns -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing Quad9 secure-profile address: $required" -ForegroundColor Red}}
 if($dns -match [regex]::Escape("'2620:fe::9'")){$failed=$true;Write-Host '[FAIL] Quad9 address 2620:fe::9 belongs to a different service family.' -ForegroundColor Red}
 if($dns -notmatch 'Add-DohEntry[^\r\n]+-Fallback\s+\$false[^\r\n]+-Upgrade\s+\$true'){$failed=$true;Write-Host '[FAIL] DNS profile application does not force DoH with UDP fallback disabled.' -ForegroundColor Red}
-foreach($required in @('Get-StaticDnsServers','Automatic=','StaticIPv4','StaticIPv6','Schema=3','-ResetServerAddresses')){if($dns -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing DNS mode-aware rollback marker: $required" -ForegroundColor Red}}
+foreach($required in @('Get-StaticDnsServers','Automatic=','StaticIPv4','StaticIPv6','Schema=4','Set-AdapterDnsFamilies','TouchedServers')){if($dns -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing DNS mode-aware rollback marker: $required" -ForegroundColor Red}}
+$networkPath=Join-Path $root 'Modules\Network.State.psm1'
+if (-not (Test-Path -LiteralPath $networkPath)) { $failed=$true; Write-Host '[FAIL] Shared network module missing.' -ForegroundColor Red }
+else {
+    $networkText=Get-Content -LiteralPath $networkPath -Raw
+    foreach ($required in @('-InputObject','-ResetServerAddresses','Get-AdapterStaticDnsServers')) { if ($networkText -notmatch [regex]::Escape($required)) { $failed=$true; Write-Host "[FAIL] Shared network module lacks $required" -ForegroundColor Red } }
+}
 
 Write-Host "`nChecking that unsafe writes were not reintroduced..." -ForegroundColor Cyan
 $gamingFiles=@(Get-ChildItem -LiteralPath $gamingRoot -Recurse -Include '*.ps1','*.psm1' -File)
