@@ -1,5 +1,9 @@
 # Security Policy
 
+## Supported versions
+
+Security fixes target the latest 3.0.x release and current `main`. Older releases are retained for reference; upgrade to the complete current bundle before reproducing a report.
+
 ## Reporting a Vulnerability
 
 Use GitHub's [private vulnerability reporting](../../security/advisories/new) to report security issues privately.
