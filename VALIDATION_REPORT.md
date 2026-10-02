@@ -4,7 +4,7 @@ Windows PC Toolkit 3.0.0, local Windows 11 validation on October 1, 2026.
 
 ## Observed results
 
-- **88 regression and real-boundary checks passed** in Windows PowerShell 5.1, STA.
+- **89 regression and real-boundary checks passed** in Windows PowerShell 5.1, STA.
 - **37 PowerShell files parsed**, and launcher/DoH/safety checks passed in `Validate_All.ps1`.
 - Native WPF loaded **55 controls and 19 optimization choices** from a freshly copied package in a path containing spaces, an apostrophe and non-English text.
 - Actual WPF Preview button → Start-Job worker → DispatcherTimer → result text/control refresh completed.
@@ -25,7 +25,7 @@ Update-repair fault injection covers failed service stop, partial cache rename, 
 
 ## CI and reproduction
 
-The CI workflow runs parser/PSScriptAnalyzer gates, static toolkit validation, this native Windows regression suite, and JSON/Python validation on each pushed commit. Use the [CI run for the exact commit](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml), not an older green run, as hosted evidence.
+The CI workflow runs parser/PSScriptAnalyzer gates, static toolkit validation, this native Windows regression suite in both canonical and installed friendly folder layouts, and JSON/Python validation on each pushed commit. Use the [CI run for the exact commit](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml), not an older green run, as hosted evidence.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1

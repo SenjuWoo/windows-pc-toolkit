@@ -63,6 +63,25 @@ jobs:
           & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
           if ($LASTEXITCODE -ne 0) { throw "Toolkit regression checks failed." }
 
+      - name: Regression checks in the installed friendly folder layout
+        shell: powershell
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP ('ToolkitFriendly_' + [guid]::NewGuid().ToString('N'))
+          [void][IO.Directory]::CreateDirectory($fixture)
+          $layout = [ordered]@{
+            Modules='Modules'; tests='tests'; 'pc-cleaner'='Pc Cleaner'
+            'pc-gaming-optimizer'='Pc Gaming Optimizer'; 'pc-corruption-fixer'='Pc Corruption Fixer'
+            'pc-privacy-guard'='Pc Privacy Guard'; 'dns-encrypted-doh'='Pc Privacy Guard\Optional DNS'
+          }
+          foreach ($folder in $layout.Keys) {
+            Copy-Item -LiteralPath (Join-Path $PWD $folder) -Destination (Join-Path $fixture $layout[$folder]) -Recurse
+          }
+          foreach ($file in @('Toolkit.ps1','Toolkit.Worker.ps1','Toolkit.Run.ps1','Toolkit.xaml')) {
+            Copy-Item -LiteralPath (Join-Path $PWD $file) -Destination $fixture
+          }
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $fixture 'tests\Test_Toolkit.ps1')
+          if ($LASTEXITCODE -ne 0) { throw "Friendly-layout regression checks failed." }
+
   data:
     name: JSON + Python validation
     runs-on: windows-latest
