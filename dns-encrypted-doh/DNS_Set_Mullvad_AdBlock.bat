@@ -1,5 +1,5 @@
 @echo off
-title DNS: Apply Mullvad AdBlock
+title DNS: Choose a supported provider
 setlocal EnableExtensions
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LOG=%LOCALAPPDATA%\Temp\DNSManager_launch.log"
@@ -24,7 +24,8 @@ if errorlevel 1 (
 
 echo [%date% %time%] elevated start >> "%LOG%"
 echo elevated > "%FLAG%"
-"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0DNS_Manager.ps1" -Action MullvadAdBlock
+echo Mullvad public DNS is retiring. Choose Quad9 or AdGuard in the menu.
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0DNS_Manager.ps1" -Action Menu
 set "RC=%ERRORLEVEL%"
 echo [%date% %time%] DNS_Manager.ps1 exited with %RC% >> "%LOG%"
 if not "%RC%"=="0" (

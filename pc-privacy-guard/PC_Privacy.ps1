@@ -39,7 +39,9 @@ function Set-RegExact{
 function Restore-RegState{
     param([pscustomobject]$State)
     if($State.Exists){Set-RegExact $State.Path $State.Name $State.Value $State.Kind}
-    elseif(Test-Path -LiteralPath $State.Path){Remove-ItemProperty -LiteralPath $State.Path -Name $State.Name -ErrorAction SilentlyContinue}
+    elseif((Get-RegState $State.Path $State.Name).Exists){Remove-ItemProperty -LiteralPath $State.Path -Name $State.Name -ErrorAction Stop}
+    $actual=Get-RegState $State.Path $State.Name
+    if($actual.Exists -ne $State.Exists -or ($actual.Exists -and ($actual.Kind -ne $State.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -ne (ConvertTo-Json -InputObject $State.Value -Compress)))){throw "Registry restore read-back failed: $($State.Path)\$($State.Name)"}
 }
 function Get-PrivacyTargets{
     @(
@@ -123,13 +125,20 @@ function Get-LatestSnapshot{
 function Restore-LatestSnapshot{
     Assert-Admin;Initialize-State;$path=Get-LatestSnapshot;if(-not $path){Write-Status WARN 'No Privacy Guard snapshot exists.';return}
     $snap=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
+    if($snap.Computer -ne $env:COMPUTERNAME -or $snap.User -ne [Security.Principal.WindowsIdentity]::GetCurrent().Name){throw 'This privacy snapshot belongs to another computer or user.'}
     foreach($s in @($snap.Registry)){Restore-RegState $s}
     foreach($s in @($snap.Services)){
         $type=switch($s.StartMode){'Auto'{'Automatic'}'Manual'{'Manual'}'Disabled'{'Disabled'}default{$null}}
-        if($type){Set-Service -Name $s.Name -StartupType $type -ErrorAction SilentlyContinue}
-        if($s.State -eq 'Running'){Start-Service -Name $s.Name -ErrorAction SilentlyContinue}elseif($s.State -eq 'Stopped'){Stop-Service -Name $s.Name -Force -ErrorAction SilentlyContinue}
+        if(-not $type){throw "Unsupported saved service mode: $($s.Name)"}
+        Set-Service -Name $s.Name -StartupType $type -ErrorAction Stop
+        if($s.State -eq 'Running'){Start-Service -Name $s.Name -ErrorAction Stop}elseif($s.State -eq 'Stopped'){Stop-Service -Name $s.Name -Force -ErrorAction Stop}
+        $actual=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $s.Name) -ErrorAction Stop
+        if($actual.StartMode -ne $s.StartMode -or $actual.State -ne $s.State){throw "Service restore read-back failed: $($s.Name)"}
     }
-    foreach($t in @($snap.Tasks)){if($t.Enabled){Enable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue|Out-Null}else{Disable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue|Out-Null}}
+    foreach($t in @($snap.Tasks)){
+        if($t.Enabled){Enable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop|Out-Null}else{Disable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop|Out-Null}
+        if([bool](Get-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop).Settings.Enabled -ne [bool]$t.Enabled){throw "Task restore read-back failed: $($t.Name)"}
+    }
     Write-Status OK ("Exact state restored from {0}" -f $path)
     Write-Status INFO 'No browser policy key was deleted wholesale. Unrelated policy values were preserved.'
     $script:CurrentSnapshot=$null

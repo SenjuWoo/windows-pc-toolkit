@@ -16,7 +16,7 @@ Run only for an update fault, from the explicit console option. Pending servicin
 
 Explicit Winsock reset is separate from Full Repair. Deeper TCP/IP reset needs its own confirmation because it can remove custom adapter configuration. Network backups abort on unreadable DNS/DoH state; restore uses adapter GUIDs and separately verifies IPv4/IPv6 automatic/static modes and existing DoH templates.
 
-Other console tools: disk scan, Store/AppX repair, event logs, service/driver/startup diagnostics, time sync, disk-space analysis, performance counters, HTML report and reversible AI/browser privacy policies. AI policy support depends on Windows edition/build. ResetBase, service removal, strict policies and other advanced operations are separate choices.
+Other console tools: disk scan, Store/AppX repair, event logs, service/driver/startup diagnostics, time sync, disk-space analysis, performance counters, HTML report and reversible AI/browser privacy policies. AI policy support depends on Windows edition/build and browser version. Policies can delete Recall snapshots and browser built-in models; undo restores policy values, not deleted data. Use the dashboard for modern Copilot app removal and checked Recall feature disabling. ResetBase, service removal, strict policies and other advanced operations are separate choices.
 
 Console logs are written to the Desktop. Network/AI/service backups are under `%ProgramData%\WindowsPCToolkit\PCFixer`. Dashboard repair reports are in `WindowsPCToolkit\Suite\Runs`.
 

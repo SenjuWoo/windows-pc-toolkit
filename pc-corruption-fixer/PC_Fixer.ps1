@@ -2557,7 +2557,6 @@ function Invoke-FullRepair {
 
 function Get-AiFeaturePolicyDefinitions {
     @(
-        [pscustomobject]@{ Path='HKCU:\Software\Policies\Microsoft\Windows\WindowsCopilot'; Name='TurnOffWindowsCopilot'; Type='DWord'; Value=1; Label='Legacy Windows Copilot entry points' },
         [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name='AllowRecallEnablement'; Type='DWord'; Value=0; Label='Recall optional component availability' },
         [pscustomobject]@{ Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name='DisableAIDataAnalysis'; Type='DWord'; Value=1; Label='Recall snapshot saving' },
         [pscustomobject]@{ Path='HKCU:\Software\Policies\Microsoft\Windows\WindowsAI'; Name='DisableAIDataAnalysis'; Type='DWord'; Value=1; Label='Recall snapshot saving for current user' },
@@ -2575,7 +2574,7 @@ function Get-AiFeaturePolicyDefinitions {
 
 function Get-AiRegistryEntryState {
     param([Parameter(Mandatory)][string]$Path,[Parameter(Mandatory)][string]$Name)
-    $pathExists = Test-Path -LiteralPath $Path
+    $pathExists = Test-Path -LiteralPath $Path -ErrorAction Stop
     $valueExists = $false
     $value = $null
     $kind = $null
@@ -2587,7 +2586,7 @@ function Get-AiRegistryEntryState {
                 $value = $item.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
                 $kind = $item.GetValueKind($Name).ToString()
             }
-        } catch {}
+        } catch { throw "Could not read AI policy state: $Path\$Name. $($_.Exception.Message)" }
     }
     [pscustomobject]@{Path=$Path;Name=$Name;PathExisted=[bool]$pathExists;ValueExisted=[bool]$valueExists;Value=$value;Kind=$kind}
 }
@@ -2626,6 +2625,7 @@ function Restore-AiFeatureSnapshot {
         return $false
     }
     $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if($snapshot.Schema -ne 1 -or $snapshot.Computer -ne $env:COMPUTERNAME -or $snapshot.User -ne [Security.Principal.WindowsIdentity]::GetCurrent().Name){throw 'This AI policy snapshot belongs to another computer/user or has an unsupported schema.'}
     $restoreErrors = 0
     foreach ($entry in @($snapshot.Entries)) {
         if ([bool]$entry.ValueExisted) {
@@ -2648,8 +2648,13 @@ function Restore-AiFeatureSnapshot {
             try { New-ItemProperty -Path $entry.Path -Name $entry.Name -PropertyType $propertyType -Value $restoreValue -Force -ErrorAction Stop | Out-Null }
             catch { $restoreErrors++ }
         } else {
-            Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction SilentlyContinue
+            try { if((Get-AiRegistryEntryState $entry.Path $entry.Name).ValueExisted){Remove-ItemProperty -LiteralPath $entry.Path -Name $entry.Name -ErrorAction Stop} }
+            catch { $restoreErrors++ }
         }
+        try {
+            $actual=Get-AiRegistryEntryState $entry.Path $entry.Name
+            if($actual.ValueExisted -ne $entry.ValueExisted -or ($actual.ValueExisted -and ($actual.Kind -ne $entry.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -ne (ConvertTo-Json -InputObject $entry.Value -Compress)))){throw 'AI policy restore read-back failed.'}
+        } catch { $restoreErrors++ }
     }
     foreach ($pathState in @($snapshot.Entries | Group-Object Path)) {
         $first = $pathState.Group | Select-Object -First 1
@@ -2663,11 +2668,12 @@ function Restore-AiFeatureSnapshot {
     if ($restoreErrors -gt 0) {
         Write-Status Warn ("Restored from {0}, but {1} value(s) could not be written - the state may be partial." -f $Path, $restoreErrors)
         $Script:Results['AI Features'] = "Partial restore ($restoreErrors failed)"
+        $Script:HasFailure = $true
     } else {
         Write-Status OK ("Exact AI-feature policy state restored from {0}" -f $Path)
         $Script:Results['AI Features'] = 'Previous policy state restored'
     }
-    return $true
+    return ($restoreErrors -eq 0)
 }
 
 function Set-AiFeaturePrivacyProfile {
@@ -2690,7 +2696,7 @@ function Set-AiFeaturePrivacyProfile {
         }
         $Script:Results['AI Features'] = "$changed reversible policies applied"
         Write-Status OK 'AI feature privacy profile applied. No services, apps, Search features, or system files were removed.'
-        Write-Status Info 'Restart Windows and reopen Edge/Chrome for every policy to take effect.'
+        Write-Status Info 'Policy effects depend on edition/build and browser version. Restart Windows and reopen browsers as needed.'
         return $true
     } catch {
         $applyError = $_.Exception.Message
@@ -2706,6 +2712,8 @@ function Invoke-AiFeaturePrivacy {
     Write-StepHeader 'AI Feature Privacy - Reversible Policy Manager'
     Write-Status Info 'Uses documented Windows and browser policy values only.'
     Write-Status Info 'It does not remove AppX packages, disable services, or alter Windows Search.'
+    Write-Status Info 'For modern Copilot app removal and checked Recall feature disabling, use Optimize in the dashboard.'
+    Write-Status Warn 'Recall policies can delete snapshots; browsers can delete built-in AI models. Policy undo does not restore that data.'
     Write-Host ''
     Write-Host '  [1] Apply recommended AI privacy profile' -ForegroundColor White
     Write-Host '  [2] Restore the most recent exact snapshot' -ForegroundColor White

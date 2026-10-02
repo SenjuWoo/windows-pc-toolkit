@@ -12,7 +12,7 @@ Rendered from the actual WPF dashboard with initial selections. Hardware and res
 
 Download the **complete current source** with GitHub's **Code → Download ZIP**, extract it, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together. Older releases do not contain this dashboard.
 
-**Optimize now** applies six recommended actions together:
+**Optimize now** applies ten recommended actions together:
 
 - Enable Windows Game Mode.
 - Disable promotional suggestions and silent suggested-app installs.
@@ -20,10 +20,14 @@ Download the **complete current source** with GitHub's **Code → Download ZIP**
 - Disable activity-history publishing and upload.
 - Clean disposable Temp files older than seven days, checking write/access age and skipping protected paths, links and locked files.
 - Refresh cached DNS answers, preserving provider and adapter settings.
+- Repair confirmed dead startup/MuiCache registry entries with typed backups.
+- Disable the Recall optional feature when present and enabled, saving its state for undo.
+- Remove allowlisted consumer apps, including modern Microsoft Copilot and the Microsoft 365 hub, after verified package copies.
+- Disable Edge built-in AI model downloads and website AI APIs where supported.
 
-**Preview changes** explains the plan without applying it. Eleven additional choices cover captures, mouse acceleration, animations, Explorer/taskbar preferences, Recall opt-out, Delivery Optimization cleanup, SSD ReTrim and targeted registry care. Some settings need sign-out to refresh; no restart is forced.
+**Preview changes** explains the plan without applying it. Nine additional choices cover captures, mouse acceleration, animations, Explorer/taskbar preferences, Delivery Optimization cleanup and SSD ReTrim. Some settings need sign-out to refresh; no restart is forced.
 
-For a larger one-click run, first select desired apps and startup items on their pages, then tick **Also apply my selected startup entries and app removals** on Optimize. They share one operation/recovery journal. App removal has a confirmation naming the apps.
+The one-click profile names installed apps in its removal confirmation; package backups are verified before each uninstall. To keep consumer apps, untick **Remove Copilot and optional consumer apps**. For individual app removals and startup control, select rows on their pages and tick **Also apply my selected startup entries and app removals**. These changes share one recovery journal.
 
 ## Six organized pages
 
@@ -40,7 +44,7 @@ The gaming console adds HAGS controls, temporary game-session priority/stay-awak
 
 ## Compatibility and registry care
 
-The recommended profile preserves Windows Update, Defender, Store, Xbox, Gaming Services, browser state, AI model stores, drivers, power/sleep, shaders, network offloads, timers and GPU interrupt settings. It does not mass-disable services, reset networking or remove packages without reviewed selections.
+The recommended profile preserves Windows Update, Defender, Store, Xbox, Gaming Services, browser state, AI model stores, drivers, power/sleep, shaders, network offloads, timers and GPU interrupt settings. It does not mass-disable services or reset networking. Consumer-AppX removal is a visible default choice with a named confirmation; Store, Xbox, Gaming Services, WebView and frameworks are excluded.
 
 Strict privacy, network reset and shader troubleshooting remain explicit advanced choices. No optimizer guarantees FPS gains or policy effects on every edition/build. Registry read-back proves a saved setting, not better frame times.
 
@@ -52,7 +56,7 @@ Existing DoH entries are updated in place. Restore matches adapter GUIDs and sep
 
 Quad9 requires its live TXT transport test to report `doh`; an unavailable test fails verification. AdGuard checks configuration/resolution without claiming the same live attestation.
 
-**Mullvad public encrypted DNS ends November 2, 2026.** Legacy profiles remain until then; new applies are subsequently blocked, while backup restore remains available. Use Quad9 or AdGuard for ongoing service. [Mullvad announcement](https://mullvad.net/en/blog/2026/9/3/shutting-down-our-public-encrypted-dns-servers-and-sponsoring-quad9-instead), [Quad9 services](https://docs.quad9.net/services/), [AdGuard DNS](https://adguard-dns.io/en/public-dns.html).
+**Mullvad public encrypted DNS ends November 2, 2026.** Its new-apply choices are removed now; old backups remain restorable. Historical Mullvad launchers open the supported-provider menu. Use Quad9 or AdGuard for ongoing service. [Mullvad announcement](https://mullvad.net/en/blog/2026/9/3/shutting-down-our-public-encrypted-dns-servers-and-sponsoring-quad9-instead), [Quad9 services](https://docs.quad9.net/services/), [AdGuard DNS](https://adguard-dns.io/en/public-dns.html).
 
 ## Recommended companion: optimizerDuck
 
@@ -66,7 +70,9 @@ Dashboard reports, typed registry journals, task states and verified package cop
 
 Registry state is saved **before** mutation, preserves types/literal environment strings, and is checked after restore. Undo keeps intervening registry changes and lists conflicts. Repeating completed undo preserves current state. Failed registry actions attempt to restore partial changes.
 
-Deleted temporary/cache files are not recoverable through the journal. App removal can delete app data; backups support package re-registration, not app-data recovery. Dependencies/servicing may prevent re-registration; the report identifies failures and Microsoft Store remains the reinstall route. System repair is logged maintenance, not a reversible registry tweak.
+Recall is disabled using the supported Windows optional-feature API with no forced restart. Undo re-enables the recorded feature; pending servicing changes require a restart before verification. The dashboard removes the modern Copilot app rather than relying on the retiring legacy Copilot policy. AI controls preserve Windows AI frameworks and separate local-AI applications/model stores. Browser-policy support varies by version/profile. [Copilot removal](https://learn.microsoft.com/en-us/windows/client-management/manage-windows-copilot), [Recall management](https://learn.microsoft.com/en-us/windows/client-management/manage-recall), [Edge model policy](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-browser-policies/genailocalfoundationalmodelsettings).
+
+Deleted temporary/cache files, Recall snapshots and browser-built-in AI models are not recoverable through the journal. Windows/Store updates may offer apps again; removal affects the current account, not provisioning for future accounts. App removal can delete app data; backups support package re-registration, not app-data recovery. Dependencies/servicing may prevent re-registration; the report identifies failures and Microsoft Store remains the reinstall route. System repair is logged maintenance, not a reversible registry tweak.
 
 Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `GamingOptimizer\Snapshots`, `PrivacyGuard\Snapshots`, `EncryptedDNS\Snapshots`, `PCFixer\NetworkSnapshots` / `AIFeatureSnapshots`, and `Cleaner\Logs` / `RegistryBackups`.
 

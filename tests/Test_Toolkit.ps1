@@ -27,7 +27,7 @@ try {
     $module=Get-Module Toolkit.Core
     $catalog=@(Get-SuiteActionCatalog)
     Check (@($catalog.Id | Select-Object -Unique).Count -eq $catalog.Count) 'Unique action identifiers'
-    Check (@($catalog | Where-Object Default).Count -eq 6) 'Recommended profile is meaningful and bounded'
+    Check (@($catalog | Where-Object Default).Count -eq 10) 'Recommended profile includes gaming, cleanup, registry care and AI/consumer debloat'
     Check (@($catalog | Where-Object Default | ForEach-Object Targets | Where-Object { $_.Path -match 'Services|WindowsUpdate|WindowsApps|Device Parameters' }).Count -eq 0) 'Default settings preserve update/security/driver dependencies'
     Expect-Failure { Get-SuitePreview @('invented-action') } 'Unknown action rejected'
     Check (@(Get-SuitePreview @()).Count -eq 0) 'Empty preview remains empty'
@@ -124,22 +124,101 @@ try {
     Check $orchestrator.FailureVisible 'Orchestrator reports a mid-action failure'
     Check $orchestrator.PartialChangeRolledBack 'Orchestrator rolls back a partial registry action'
 
+    # Real package files + real robocopy/hash verification; only AppX/servicing
+    # calls are simulated. No installed application or feature is changed.
+    $packageRoot=Join-Path $fixture 'Package'
+    [void][IO.Directory]::CreateDirectory($packageRoot)
+    [IO.File]::WriteAllText((Join-Path $packageRoot 'AppxManifest.xml'),'<fixture/>')
+    [IO.File]::WriteAllText((Join-Path $packageRoot 'payload.bin'),'package bytes')
+    $debloat=& $module {
+        param($packageRoot)
+        $savedAdmin=(Get-Item Function:Assert-Administrator).ScriptBlock
+        $script:FixturePackageRoot=$packageRoot; $script:FixtureInstalled=$true; $script:FixtureRemovals=0
+        $script:FixtureFeature='Enabled'; $script:FixtureFeatureCalls=0
+        try {
+            function script:Assert-Administrator { }
+            function script:Get-AppxPackage {
+                param($Name)
+                if (-not $Name) {
+                    foreach ($packageName in @('Microsoft.Copilot','Microsoft.WindowsStore','Microsoft.GamingServices','Microsoft.XboxApp')) {
+                        [pscustomobject]@{Name=$packageName;PackageFullName=$packageName+'_fixture';InstallLocation=$script:FixturePackageRoot;Version='1.0';IsFramework=$false;NonRemovable=$false}
+                    }
+                    [pscustomobject]@{Name='Microsoft.BingNews';PackageFullName='Framework_fixture';InstallLocation=$script:FixturePackageRoot;Version='1.0';IsFramework=$true;NonRemovable=$false}
+                } elseif ($Name -eq 'Microsoft.Copilot' -and $script:FixtureInstalled) { [pscustomobject]@{Name=$Name} }
+            }
+            function script:Remove-AppxPackage { param($Package) if ($Package -ne 'Microsoft.Copilot_fixture') { throw 'Protected package reached removal' }; $script:FixtureRemovals++; $script:FixtureInstalled=$false }
+            function script:Add-AppxPackage { param($Register,[switch]$DisableDevelopmentMode) if (-not (Test-Path -LiteralPath $Register)) { throw 'Missing reinstall manifest' }; $script:FixtureInstalled=$true }
+            $available=@(Get-SuiteAppCatalog)
+            $preview=@(Get-SuitePreview @('Debloat'))
+            $run=Invoke-SuiteRun -ActionIds @('Debloat')
+            $copied=[IO.File]::ReadAllText((Join-Path $run.Apps[0].Backup 'payload.bin')) -eq 'package bytes'
+            $removed=($run.Status -eq 'Completed' -and $run.Apps.Count -eq 1 -and -not $script:FixtureInstalled)
+            $undo=Invoke-SuiteUndo $run.Path
+            $reinstalled=($undo.Status -eq 'Restored' -and $script:FixtureInstalled)
+            Remove-Item -LiteralPath (Join-Path $packageRoot 'AppxManifest.xml') -Force
+            $badBackup=Invoke-SuiteRun -ActionIds @('Debloat')
+            $blocked=($badBackup.Status -eq 'CompletedWithErrors' -and $script:FixtureRemovals -eq 1 -and $script:FixtureInstalled)
+            $protectedBlocked=$false
+            try { $null=Invoke-SuiteRun -ActionIds @('Debloat') -AppIds @('Microsoft.WindowsStore_fixture') } catch { $protectedBlocked=$true }
+            function script:Get-CimInstance { [pscustomobject]@{BuildNumber='26100'} }
+            function script:Get-WindowsOptionalFeature { param([switch]$Online,$FeatureName) [pscustomobject]@{FeatureName='Recall';State=$script:FixtureFeature} }
+            function script:Disable-WindowsOptionalFeature { param([switch]$Online,$FeatureName,[switch]$NoRestart) if (-not $NoRestart) { throw 'Restart must stay explicit' }; $script:FixtureFeatureCalls++; $script:FixtureFeature='Disabled'; [pscustomobject]@{RestartNeeded=$false} }
+            function script:Enable-WindowsOptionalFeature { param([switch]$Online,$FeatureName,[switch]$NoRestart) if (-not $NoRestart) { throw 'Restart must stay explicit' }; $script:FixtureFeature='Enabled'; [pscustomobject]@{RestartNeeded=$false} }
+            # Fake only reboot-key probes; use native filesystem access elsewhere.
+            function script:Test-Path { param($LiteralPath) if ($LiteralPath -like 'HKLM:*') { return $false }; Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath }
+            $featureRun=Invoke-SuiteRun -ActionIds @('Recall')
+            $featureDisabled=($featureRun.Status -eq 'Completed' -and $featureRun.Features.Count -eq 1 -and $script:FixtureFeature -eq 'Disabled')
+            $featureUndo=Invoke-SuiteUndo $featureRun.Path
+            $featureRestored=($featureUndo.Status -eq 'Restored' -and $script:FixtureFeature -eq 'Enabled')
+            $script:FixtureFeature='Disabled'
+            $alreadyDisabled=Invoke-SuiteRun -ActionIds @('Recall')
+            [pscustomobject]@{Allowlist=($available.Count -eq 1 -and $available[0].Name -eq 'Microsoft.Copilot');Preview=($preview[0].Details -match 'Installed: Microsoft.Copilot');Copied=$copied;Removed=$removed;Reinstalled=$reinstalled;BackupBlocked=$blocked;ProtectedBlocked=$protectedBlocked;FeatureDisabled=$featureDisabled;FeatureRestored=$featureRestored;FeatureSkipped=($alreadyDisabled.Features.Count -eq 0 -and $script:FixtureFeatureCalls -eq 1 -and $alreadyDisabled.Steps[0].Status -eq 'Skipped')}
+        } finally {
+            Set-Item Function:script:Assert-Administrator $savedAdmin
+            foreach ($name in @('Get-AppxPackage','Remove-AppxPackage','Add-AppxPackage','Get-CimInstance','Get-WindowsOptionalFeature','Disable-WindowsOptionalFeature','Enable-WindowsOptionalFeature','Test-Path')) { Remove-Item ('Function:script:'+$name) -ErrorAction SilentlyContinue }
+        }
+    } $packageRoot
+    Check $debloat.Allowlist 'Copilot is removable; Store, Xbox, Gaming Services and frameworks stay excluded'
+    Check $debloat.Preview 'Debloat preview names the installed consumer packages'
+    Check $debloat.Copied 'Real robocopy package backup preserves exact file bytes'
+    Check $debloat.Removed 'One-click debloat backs up then invokes selected package removal'
+    Check $debloat.Reinstalled 'Package journal undo uses the saved manifest for re-registration'
+    Check $debloat.BackupBlocked 'Incomplete package backup prevents removal and reports failure'
+    Check $debloat.ProtectedBlocked 'Protected app IDs fail preflight before optimization'
+    Check $debloat.FeatureDisabled 'Recall feature state is journaled before checked disabling'
+    Check $debloat.FeatureRestored 'Recall feature undo restores and verifies original enabled state'
+    Check $debloat.FeatureSkipped 'Already disabled Recall is preserved without another servicing call'
+
     # Real filesystem deletion boundary: recent files, protected names, links.
     $tempRoot=Join-Path $fixture 'Temp'; $outside=Join-Path $fixture 'Outside'
     [void][IO.Directory]::CreateDirectory($tempRoot); [void][IO.Directory]::CreateDirectory($outside)
     [void][IO.Directory]::CreateDirectory((Join-Path $tempRoot 'Documents'))
-    foreach ($path in @((Join-Path $tempRoot 'old.tmp'),(Join-Path $tempRoot 'new.tmp'),(Join-Path $tempRoot 'Documents\keep.tmp'),(Join-Path $outside 'keep.tmp'))) {
+    foreach ($path in @((Join-Path $tempRoot 'old.tmp'),(Join-Path $tempRoot 'new.tmp'),(Join-Path $tempRoot 'accessed.tmp'),(Join-Path $tempRoot 'Documents\keep.tmp'),(Join-Path $outside 'keep.tmp'))) {
         [IO.File]::WriteAllText($path,'fixture')
         if ($path -notlike '*new.tmp') { [IO.File]::SetLastWriteTime($path,(Get-Date).AddDays(-10)); [IO.File]::SetLastAccessTime($path,(Get-Date).AddDays(-10)) }
     }
+    [IO.File]::SetLastAccessTime((Join-Path $tempRoot 'accessed.tmp'),(Get-Date))
     $link=Join-Path $tempRoot 'linked'
     New-Item -ItemType Junction -Path $link -Value $outside -ErrorAction Stop | Out-Null
     Check (@(Get-SuiteOldTempFiles @($tempRoot)).Count -eq 1) 'Age + protected data + junction boundaries'
     Check (-not (Test-SuitePathWithoutLinks (Join-Path $link 'keep.tmp') $tempRoot)) 'Nested junction cannot escape cleanup root'
     Check (-not (Test-SuitePathWithoutLinks (Join-Path $outside 'keep.tmp') $tempRoot)) 'Sibling path cannot escape cleanup root'
+    # Re-age only our owned fixture after the read-only enumeration above.
+    # Hosted Windows TEMP uses an 8.3 alias; this also exercises normalization.
+    $oldFixture=Join-Path $tempRoot 'old.tmp'
+    [IO.File]::SetLastWriteTime($oldFixture,(Get-Date).AddDays(-10))
+    [IO.File]::SetLastAccessTime($oldFixture,(Get-Date).AddDays(-10))
     $summary=& $module { param($testRoot) $script:TestTempRoot=$testRoot; function script:Get-SuiteTempRoots { @($script:TestTempRoot) }; Invoke-SuiteTempCleanup } $tempRoot
+    if (Test-Path -LiteralPath $oldFixture) {
+        $diagnostic=& $module { param($path,$testRoot)
+            $file=Get-Item -LiteralPath $path -Force
+            [pscustomobject]@{Root=$testRoot;FullName=$file.FullName;Roots=@(Get-SuiteTempRoots);LinkBoundary=(Test-SuitePathWithoutLinks $file.FullName $testRoot);Candidates=@(Get-SuiteOldTempFiles | ForEach-Object FullName);Write=$file.LastWriteTime;Access=$file.LastAccessTime;Attributes=[string]$file.Attributes}
+        } $oldFixture $tempRoot
+        throw "TEST FAILED: Old disposable file actually removed. $summary Diagnostics: $($diagnostic | ConvertTo-Json -Depth 4 -Compress)"
+    }
     Check (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'old.tmp'))) 'Old disposable file actually removed'
     Check (Test-Path -LiteralPath (Join-Path $tempRoot 'new.tmp')) 'Recent temp file preserved'
+    Check (Test-Path -LiteralPath (Join-Path $tempRoot 'accessed.tmp')) 'Old but recently accessed temp file preserved'
     Check (Test-Path -LiteralPath (Join-Path $tempRoot 'Documents\keep.tmp')) 'Protected data preserved'
     Check (Test-Path -LiteralPath (Join-Path $outside 'keep.tmp')) 'Linked destination preserved'
     Check ($summary -match '^1 aged files removed') 'Cleanup reports actual successful removals'
@@ -168,7 +247,7 @@ try {
     $result=Get-Content -LiteralPath ($requestPath+'.result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Check ($result.Status -eq 'Completed' -and @($result.Data).Count -eq 1) 'Fresh install worker + argument quoting + JSON result'
     $native=Invoke-SuiteNative "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @('-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',(Join-Path $fresh 'Toolkit.ps1'),'-SmokeTest')
-    Check ($native.Output -match 'Dashboard loaded: 55 controls, 17 optimization choices') 'Real WPF dashboard loads in a fresh install'
+    Check ($native.Output -match 'Dashboard loaded: 55 controls, 19 optimization choices') 'Real WPF dashboard loads in a fresh install'
     # Exercise the actual WPF button -> background job -> DispatcherTimer ->
     # rendered result path. Preview reads settings and changes none of them.
     . (Join-Path $fresh 'Toolkit.ps1') -SmokeTest | Out-Null
@@ -208,6 +287,8 @@ try {
     $families=& $network { $script:Families }
     Check (($families[2] -join ',') -eq '9.9.9.9' -and @($families[23]).Count -eq 0) 'IPv4 static + IPv6 automatic remains distinct'
     . (Join-Path $root 'dns-encrypted-doh\DNS_Manager.ps1') -Action Library
+    Check ($Providers.Count -eq 2 -and $Providers.Contains('Quad9') -and $Providers.Contains('AdGuard')) 'Only ongoing DNS providers are offered'
+    Expect-Failure { Set-Provider MullvadAdBlock } 'Retiring Mullvad apply fails before initialization or DNS mutation'
     $StateRoot=Join-Path $fixture 'Dns'; [void][IO.Directory]::CreateDirectory($StateRoot)
     function Assert-Admin { }
     function Initialize-State { }
@@ -300,6 +381,52 @@ try {
         Check ($repairResult.Starts -notcontains 'cryptsvc' -and $repairResult.Starts -notcontains 'DoSvc') "Update repair preserves stopped services during $scenario"
         if ($scenario -eq 'StopFailure') { Check ($repairResult.Renames -eq 0 -and $repairResult.Services.bits -eq 'Running') 'Failed service stop prevents all cache mutation and restores prior services' }
     }
+    $privacySource=Join-Path $root 'pc-privacy-guard\PC_Privacy.ps1'
+    if (-not (Test-Path -LiteralPath $privacySource)) { $privacySource=Join-Path $root 'Pc Privacy Guard\PC_Privacy.ps1' }
+    $privacyAst=[Management.Automation.Language.Parser]::ParseFile($privacySource,[ref]$null,[ref]$null)
+    $privacyDefinitions=@($privacyAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Get-RegState','Set-RegExact','Restore-RegState','Restore-LatestSnapshot')},$false) | ForEach-Object { $_.Extent.Text }) -join "`n"
+    $privacyChecks=& {
+        param($definitions,$key,$fixture)
+        Invoke-Expression $definitions
+        function Assert-Admin { }
+        function Initialize-State { }
+        function Get-LatestSnapshot { Join-Path $fixture 'privacy.json' }
+        $script:FixturePrivacySuccess=$false
+        function Write-Status { param($Kind,$Message) if ($Kind -eq 'OK') { $script:FixturePrivacySuccess=$true } }
+        $before=Get-RegState $key 'Expanded'
+        Set-RegExact $key 'Expanded' 'temporary' String
+        Restore-RegState ($before | ConvertTo-Json | ConvertFrom-Json)
+        $typed=((Get-RegState $key 'Expanded').Kind -eq 'ExpandString' -and (Get-RegState $key 'Expanded').Value -eq '%TEMP%\literal')
+        $snapshot=[pscustomobject]@{Computer=$env:COMPUTERNAME;User=[Security.Principal.WindowsIdentity]::GetCurrent().Name;Registry=@();Services=@([pscustomobject]@{Name='FixtureService';StartMode='Auto';State='Running'});Tasks=@()}
+        Save-SuiteJson (Get-LatestSnapshot) $snapshot
+        function Set-Service { }
+        function Start-Service { throw 'Injected service restart failure' }
+        function Stop-Service { throw 'Unexpected service mutation' }
+        $failure=''
+        try { Restore-LatestSnapshot } catch { $failure=$_.Exception.Message }
+        [pscustomobject]@{Typed=$typed;Failed=($failure -eq 'Injected service restart failure' -and -not $script:FixturePrivacySuccess)}
+    } $privacyDefinitions $testKey $fixture
+    Check $privacyChecks.Typed 'Privacy undo verifies exact registry type and literal environment value'
+    Check $privacyChecks.Failed 'Privacy undo exposes service restore failure instead of claiming exact success'
+    $aiDefinitions=@($fixerAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Get-AiRegistryEntryState','Restore-AiFeatureSnapshot')},$false) | ForEach-Object { $_.Extent.Text }) -join "`n"
+    $aiChecks=& {
+        param($definitions,$key,$fixture)
+        Invoke-Expression $definitions
+        $state=Get-AiRegistryEntryState $key 'Expanded'
+        $snapshot=[pscustomobject]@{Schema=1;Computer=$env:COMPUTERNAME;User=[Security.Principal.WindowsIdentity]::GetCurrent().Name;Entries=@($state)}
+        $path=Join-Path $fixture 'ai-policy.json'; Save-SuiteJson $path $snapshot
+        $script:Results=@{}; $script:HasFailure=$false
+        function Write-Status { }
+        function New-ItemProperty { throw 'Injected denied registry restore' }
+        Set-ItemProperty -LiteralPath $key -Name 'Expanded' -Value 'changed'
+        $reportedFailure=(-not (Restore-AiFeatureSnapshot $path) -and $script:HasFailure)
+        function Get-Item { throw 'Injected denied registry read' }
+        $readFailure=''
+        try { $null=Get-AiRegistryEntryState $key 'Expanded' } catch { $readFailure=$_.Exception.Message }
+        [pscustomobject]@{RestoreFailed=$reportedFailure;ReadFailed=($readFailure -match 'Could not read AI policy state')}
+    } $aiDefinitions $testKey $fixture
+    Check $aiChecks.RestoreFailed 'AI policy undo returns failure when a saved value cannot be restored'
+    Check $aiChecks.ReadFailed 'Unreadable AI registry state aborts snapshots rather than recording absence'
     Write-Host "PASS: $checks regression and real-boundary checks." -ForegroundColor Green
 } finally {
     if ($link -and (Test-Path -LiteralPath $link)) { [IO.Directory]::Delete($link) }

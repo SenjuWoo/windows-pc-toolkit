@@ -51,7 +51,7 @@ function New-SuiteRun {
         Schema=1; Id=$id; Version=$script:SuiteVersion; Computer=$env:COMPUTERNAME; UserSid=(Get-SuiteIdentity)
         Created=(Get-Date).ToString('o'); Mode=$Mode; Status='Running'; Message='Preparing'
         Registry=(New-Object Collections.ArrayList); Tasks=(New-Object Collections.ArrayList)
-        Apps=(New-Object Collections.ArrayList); Steps=(New-Object Collections.ArrayList)
+        Apps=(New-Object Collections.ArrayList); Features=(New-Object Collections.ArrayList); Steps=(New-Object Collections.ArrayList)
         Path=(Join-Path $script:SuiteDataRoot "Runs\$id.json")
     }
     Save-SuiteJson $run.Path $run
@@ -128,7 +128,7 @@ function Get-SuiteActionCatalog {
             @{Path='HKCU:\Control Panel\Mouse';Name='MouseThreshold2';Value='0';Kind='String'})},
         [pscustomobject]@{Id='DeliveryCache';Name='Clear Delivery Optimization cache';Category='Maintenance';Default=$false;Detail='Use the Windows cache-cleanup API. Active downloads remain managed by Windows. Cache contents are not undoable.';Targets=@()},
         [pscustomobject]@{Id='Retrim';Name='ReTrim supported SSD volumes';Category='Storage';Default=$false;Detail='Ask Windows to ReTrim fixed NTFS/ReFS SSD volumes. Scheduled drive optimization usually covers this.';Targets=@()},
-        [pscustomobject]@{Id='RegistryCare';Name='Repair dead startup and app-display entries';Category='Maintenance';Default=$false;Detail='Back up and remove entries with missing executables on ready fixed drives. No broad registry sweep or FPS claim.';Targets=@()}
+        [pscustomobject]@{Id='RegistryCare';Name='Repair dead startup and app-display entries';Category='Maintenance';Default=$true;Detail='Back up and remove entries with missing executables on ready fixed drives. No broad registry sweep or FPS claim.';Targets=@()}
         [pscustomobject]@{Id='Extensions';Name='Show file extensions';Category='Appearance';Default=$false;Detail='Show known file extensions in Explorer. Sign out to refresh Explorer settings.';Targets=@(
             @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';Name='HideFileExt';Value=0})}
         [pscustomobject]@{Id='DarkMode';Name='Use dark Windows and app themes';Category='Appearance';Default=$false;Detail='Choose dark mode for Windows and apps that follow the Windows theme.';Targets=@(
@@ -138,8 +138,11 @@ function Get-SuiteActionCatalog {
             @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';Name='TaskbarAl';Value=0})}
         [pscustomobject]@{Id='Widgets';Name='Hide the Widgets taskbar button';Category='Appearance';Default=$false;MinBuild=22000;Detail='Hide Widgets from the taskbar; keep WebView and the Windows components installed.';Targets=@(
             @{Path='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced';Name='TaskbarDa';Value=0})}
-        [pscustomobject]@{Id='Recall';Name='Disable future Recall snapshots';Category='Privacy';Default=$false;MinBuild=26100;Detail='Use the Windows 11 Recall opt-out policy. Keep existing data; hardware and edition determine availability.';Targets=@(
-            @{Path='HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI';Name='DisableAIDataAnalysis';Value=1})}
+        [pscustomobject]@{Id='Recall';Name='Disable the Recall Windows feature';Category='AI debloat';Default=$true;MinBuild=26100;Detail='Disable Recall through Windows servicing when installed. Save feature state for undo; no forced restart. Recall snapshot data is not backed up.';Targets=@()}
+        [pscustomobject]@{Id='Debloat';Name='Remove Copilot and optional consumer apps';Category='AI debloat';Default=$true;Detail='Remove this account''s allowlisted Copilot, Microsoft 365 hub, promotions and consumer apps after verified package backups. Preview lists installed apps; removal may delete their app data.';Targets=@()}
+        [pscustomobject]@{Id='BrowserAI';Name='Disable built-in Edge AI models and APIs';Category='AI debloat';Default=$true;Detail='Block Edge built-in model downloads and website AI APIs where supported. Edge may delete its downloaded model; your separate AI apps/models are preserved. Policy undo does not restore model files.';Targets=@(
+            @{Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge';Name='GenAILocalFoundationalModelSettings';Value=1},
+            @{Path='HKLM:\SOFTWARE\Policies\Microsoft\Edge';Name='BuiltInAIAPIsEnabled';Value=0})}
     )
 }
 function Get-SuiteTempRoots { @($env:TEMP,(Join-Path $env:SystemRoot 'Temp')) | Select-Object -Unique }
@@ -162,9 +165,12 @@ function Get-SuiteOldTempFiles {
 }
 function Invoke-SuiteTempCleanup {
     $removed=0; $skipped=0; $bytes=[long]0; $cutoff=(Get-Date).AddDays(-7)
+    # Windows can expose TEMP through an 8.3 user-folder alias. Normalize roots
+    # with the same native path API used by the deletion boundary check.
+    $roots=@(Get-SuiteTempRoots | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\')+'\' })
     foreach ($file in Get-SuiteOldTempFiles) {
         try {
-            $root=Get-SuiteTempRoots | Where-Object { $file.FullName.StartsWith($_.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+            $root=$roots | Where-Object { [IO.Path]::GetFullPath($file.FullName).StartsWith($_,[StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
             if (-not $root -or -not (Test-SuitePathWithoutLinks $file.FullName $root)) { $skipped++; continue }
             $current=Get-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
             if ($current.LastWriteTime -ge $cutoff -or $current.LastAccessTime -ge $cutoff) { $skipped++; continue }
@@ -208,7 +214,7 @@ function Get-SuiteStartupItems {
 function Get-SuiteAppCatalog {
     # Explicit consumer-app allowlist. Store, Xbox, Gaming Services, WebView,
     # frameworks, drivers and Windows components never enter this list.
-    $names=@('Clipchamp.Clipchamp','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.MicrosoftOfficeHub','Microsoft.MicrosoftSolitaireCollection','Microsoft.People','Microsoft.Todos','Microsoft.WindowsFeedbackHub','Microsoft.YourPhone','Microsoft.ZuneMusic','Microsoft.ZuneVideo','MicrosoftCorporationII.MicrosoftFamily')
+    $names=@('Microsoft.Copilot','Clipchamp.Clipchamp','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.MicrosoftOfficeHub','Microsoft.MicrosoftSolitaireCollection','Microsoft.People','Microsoft.Todos','Microsoft.WindowsFeedbackHub','Microsoft.YourPhone','Microsoft.ZuneMusic','Microsoft.ZuneVideo','MicrosoftCorporationII.MicrosoftFamily')
     foreach ($app in Get-AppxPackage -ErrorAction Stop | Where-Object { $names -contains $_.Name -and -not $_.IsFramework -and -not $_.NonRemovable }) {
         [pscustomobject]@{Id=$app.PackageFullName;Name=$app.Name;Version=[string]$app.Version;Location=$app.InstallLocation;Detail='Optional consumer app. Removal affects this user and its app data; package reinstall is available.'}
     }
@@ -242,7 +248,12 @@ function Get-SuitePreview {
     foreach ($id in $ActionIds) {
         $action=$catalog | Where-Object Id -eq $id | Select-Object -First 1
         if (-not $action) { throw "Unknown action: $id" }
-        [pscustomobject]@{Action=$action.Name;Category=$action.Category;Details=$action.Detail;Changes=@($action.Targets).Count}
+        $details=$action.Detail
+        if ($id -eq 'Debloat') {
+            $apps=@(Get-SuiteAppCatalog)
+            $details+=' Installed: '+$(if ($apps.Count) { @($apps.Name) -join ', ' } else { 'None' })
+        }
+        [pscustomobject]@{Action=$action.Name;Category=$action.Category;Details=$details;Changes=@($action.Targets).Count}
     }
 }
 function Add-SuiteStep {
@@ -257,6 +268,8 @@ function Invoke-SuiteRun {
     $catalog=@(Get-SuiteActionCatalog)
     if ($null -eq $ActionIds) { $ActionIds=@(($catalog | Where-Object Default).Id) }
     $null=Get-SuitePreview $ActionIds
+    if ($ActionIds -contains 'Debloat' -and -not $PSBoundParameters.ContainsKey('AppIds')) { $AppIds=@(Get-SuiteAppCatalog | ForEach-Object Id) }
+    $AppIds=@($AppIds | Select-Object -Unique)
     if ($StartupIds.Count) {
         $startup=@(Get-SuiteStartupItems)
         foreach ($id in $StartupIds) { if (@($startup | Where-Object Id -eq $id).Count -ne 1) { throw 'A selected startup entry changed. Refresh the list.' } }
@@ -286,6 +299,27 @@ function Invoke-SuiteRun {
                 switch ($id) {
                     'Temp' { $message=Invoke-SuiteTempCleanup }
                     'DnsCache' { Clear-DnsClientCache -ErrorAction Stop; $message='DNS cache refreshed. Adapter settings preserved.' }
+                    'Debloat' {
+                        if (-not $AppIds.Count) { Add-SuiteStep $run $action.Name 'Skipped' 'No optional consumer apps selected or installed.' }
+                        else { Add-SuiteStep $run $action.Name 'Queued' 'Consumer app selections validated. Verified backup and removal follows below.' }
+                        continue
+                    }
+                    'Recall' {
+                        foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
+                            if (Test-Path -LiteralPath $key) { throw 'Finish the pending Windows restart before changing the Recall feature.' }
+                        }
+                        $feature=Get-WindowsOptionalFeature -Online -ErrorAction Stop | Where-Object FeatureName -eq 'Recall' | Select-Object -First 1
+                        if (-not $feature -or [string]$feature.State -in @('Disabled','DisabledWithPayloadRemoved')) { Add-SuiteStep $run $action.Name 'Skipped' 'Recall is absent or already disabled.'; continue }
+                        if ([string]$feature.State -ne 'Enabled') { throw 'Recall has a pending servicing change. Restart Windows first.' }
+                        $entry=[pscustomobject]@{Name='Recall';Before='Enabled';After='Disabled';Status='Pending'}
+                        [void]$run.Features.Add($entry); Save-SuiteJson $run.Path $run
+                        $result=Disable-WindowsOptionalFeature -Online -FeatureName Recall -NoRestart -ErrorAction Stop
+                        $actual=[string](Get-WindowsOptionalFeature -Online -FeatureName Recall -ErrorAction Stop).State
+                        if ($actual -notin @('Disabled','DisabledWithPayloadRemoved','DisablePending')) { throw 'Recall disable read-back failed.' }
+                        $entry.After=$actual; $entry.Status='Applied'; Save-SuiteJson $run.Path $run
+                        $message='Recall disabled through Windows servicing. Feature payload kept for undo; snapshot data is not restored.'
+                        if ($result.RestartNeeded -or $actual -eq 'DisablePending') { $message+=' Restart Windows to finish.' }
+                    }
                     'DeliveryCache' { Delete-DeliveryOptimizationCache -Force -ErrorAction Stop; $message='Windows Delivery Optimization cache-cleanup request completed.' }
                     'Retrim' {
                         $count=0
@@ -324,7 +358,7 @@ function Invoke-SuiteRun {
             try { $null=Invoke-SuiteStartupDisable -Ids $StartupIds -Run $run } catch { Add-SuiteStep $run 'Reviewed startup items' 'Failed' $_.Exception.Message }
         }
         if ($AppIds.Count) {
-            $run.Message='Removing reviewed consumer apps'; if ($Progress) { & $Progress $run }
+            $run.Message='Backing up and removing selected consumer apps'; if ($Progress) { & $Progress $run }
             try { $null=Invoke-SuiteAppRemoval -Ids $AppIds -Run $run } catch { Add-SuiteStep $run 'Reviewed app removal' 'Failed' $_.Exception.Message }
         }
         $run.Status=if (@($run.Steps | Where-Object Status -eq 'Failed').Count) { 'CompletedWithErrors' } else { 'Completed' }
@@ -376,7 +410,7 @@ function Invoke-SuiteAppRemoval {
                 $source=Get-Item -LiteralPath $app.Location -ErrorAction Stop
                 if ($source.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package folder is a link; kept the app.' }
                 if (@(Get-ChildItem -LiteralPath $source.FullName -Recurse -Force -ErrorAction Stop | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Package contains linked files/folders; kept the app.' }
-                $backup=Join-Path $script:SuiteDataRoot ('AppBackups\'+$run.Id+'\'+$app.Name)
+                $backup=Join-Path $script:SuiteDataRoot ('AppBackups\'+$run.Id+'\'+$app.Id)
                 [void][IO.Directory]::CreateDirectory($backup)
                 # robocopy preserves long package paths and skips junctions. Codes 0-7 are success.
                 $null=Invoke-SuiteNative "$env:SystemRoot\System32\robocopy.exe" @($app.Location,$backup,'/E','/XJ','/R:0','/W:0','/NFL','/NDL','/NJH','/NJS') @(0,1,2,3,4,5,6,7)
@@ -447,6 +481,23 @@ function Invoke-SuiteUndo {
                 $entry.Status='Restored'
             } catch { [void]$errors.Add($_.Exception.Message) }
             Save-SuiteJson $full $run
+        }
+        if ($run.PSObject.Properties.Name -contains 'Features') {
+            foreach ($entry in @($run.Features)) {
+                try {
+                    if ($entry.Status -eq 'Restored') { continue }
+                    $current=[string](Get-WindowsOptionalFeature -Online -FeatureName $entry.Name -ErrorAction Stop).State
+                    if ($current -eq $entry.Before) { $entry.Status='Restored'; continue }
+                    if ($current -in @('EnablePending','DisablePending')) { throw 'Restart Windows before restoring the Recall feature.' }
+                    if ($current -ne $entry.After) { throw 'Windows feature changed since optimization; current state preserved.' }
+                    $result=Enable-WindowsOptionalFeature -Online -FeatureName $entry.Name -NoRestart -ErrorAction Stop
+                    $actual=[string](Get-WindowsOptionalFeature -Online -FeatureName $entry.Name -ErrorAction Stop).State
+                    if ($actual -eq 'EnablePending' -or $result.RestartNeeded) { throw 'Recall restore requested. Restart Windows, then retry undo to verify.' }
+                    if ($actual -ne $entry.Before) { throw 'Recall restore read-back failed.' }
+                    $entry.Status='Restored'
+                } catch { [void]$errors.Add($_.Exception.Message) }
+                Save-SuiteJson $full $run
+            }
         }
         $run.Status=if ($errors.Count) { 'UndoNeedsAttention' } else { 'Restored' }
         $run.Message=if ($errors.Count) { $errors -join "`n" } else { 'Settings/startup restored and checked. Deleted temp/cache files and removed app data are not restored.' }
