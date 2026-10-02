@@ -23,12 +23,6 @@ $SnapshotRoot=Join-Path $StateRoot 'Snapshots'
 $Providers=[ordered]@{
     Quad9=[pscustomobject]@{Name='Quad9 Secure'; V4=@('9.9.9.9','149.112.112.112'); V6=@('2620:fe::fe','2620:fe::fe:9'); Template='https://dns.quad9.net/dns-query'; LiveTest='Quad9'}
     AdGuard=[pscustomobject]@{Name='AdGuard DNS'; V4=@('94.140.14.14','94.140.15.15'); V6=@('2a10:50c0::ad1:ff','2a10:50c0::ad2:ff'); Template='https://dns.adguard-dns.com/dns-query'; LiveTest='Config'}
-    Mullvad=[pscustomobject]@{Name='Mullvad DNS'; V4=@('194.242.2.2'); V6=@('2a07:e340::2'); Template='https://dns.mullvad.net/dns-query'; LiveTest='Config'}
-    MullvadAdBlock=[pscustomobject]@{Name='Mullvad AdBlock'; V4=@('194.242.2.3'); V6=@('2a07:e340::3'); Template='https://adblock.dns.mullvad.net/dns-query'; LiveTest='Config'}
-    MullvadBase=[pscustomobject]@{Name='Mullvad Base'; V4=@('194.242.2.4'); V6=@('2a07:e340::4'); Template='https://base.dns.mullvad.net/dns-query'; LiveTest='Config'}
-    MullvadExtended=[pscustomobject]@{Name='Mullvad Extended'; V4=@('194.242.2.5'); V6=@('2a07:e340::5'); Template='https://extended.dns.mullvad.net/dns-query'; LiveTest='Config'}
-    MullvadFamily=[pscustomobject]@{Name='Mullvad Family'; V4=@('194.242.2.6'); V6=@('2a07:e340::6'); Template='https://family.dns.mullvad.net/dns-query'; LiveTest='Config'}
-    MullvadAll=[pscustomobject]@{Name='Mullvad All'; V4=@('194.242.2.9'); V6=@('2a07:e340::9'); Template='https://all.dns.mullvad.net/dns-query'; LiveTest='Config'}
 }
 
 function Write-Status {
@@ -156,12 +150,9 @@ function Test-WindowsDohSupport {
 }
 function Set-Provider {
     param([string]$Key)
+    if ($Key -like 'Mullvad*') { throw 'Mullvad public DNS retires November 2, 2026. New applies are removed; choose Quad9 or AdGuard. Previous backups remain restorable.' }
     Assert-Admin;Test-WindowsDohSupport;Initialize-State
-    $provider=$Providers[$Key];if(-not $provider){throw "Unknown provider: $Key"}
-    if ($Key -like 'Mullvad*') {
-        if ([DateTime]::UtcNow -ge [DateTime]'2026-11-02T00:00:00Z') { throw 'Mullvad public encrypted DNS has been retired. Select Quad9 or restore automatic DNS.' }
-        Write-Status WARN 'Mullvad public encrypted DNS ends November 2, 2026. Plan to switch provider before that date.'
-    }
+    $provider=$Providers[$Key];if(-not $provider){throw "Unknown or retired provider: $Key. Choose Quad9 or AdGuard."}
     $adapters=@(Get-Adapters);if(-not $adapters){throw 'No active network adapter was found.'}
     $servers=@($provider.V4)+@($provider.V6)
     $snapshotPath=New-DnsSnapshot -TouchedServers $servers
@@ -309,13 +300,7 @@ function Show-Menu {
     Write-Host '  Mullvad public encrypted DNS ends November 2, 2026.' -ForegroundColor Yellow
     Write-Host '  Quad9 is the recommended ongoing provider.' -ForegroundColor Gray
     Write-Host '  [1] Quad9 Secure           Malware blocking, no ad blocking'
-    Write-Host '  [2] Mullvad DNS            No filtering'
-    Write-Host '  [3] Mullvad AdBlock        Ads and trackers'
-    Write-Host '  [4] Mullvad Base           Ads, trackers, malware'
-    Write-Host '  [5] Mullvad Extended       Base plus social tracking'
-    Write-Host '  [6] Mullvad Family         Base plus adult and gambling'
-    Write-Host '  [7] Mullvad All            Maximum published filtering'
-    Write-Host '  [8] AdGuard DNS            Ads and trackers'
+    Write-Host '  [2] AdGuard DNS            Ads and trackers'
     Write-Host '  [V] Verify current DoH configuration'
     Write-Host '  [R] Restore exact previous DNS state'
     Write-Host '  [D] Return active adapters to DHCP DNS'
@@ -334,6 +319,6 @@ if($Action -ne 'Menu'){
 }
 while($true){
     Show-Menu;$c=(Read-Host '  Select').Trim().ToUpperInvariant()
-    try{switch($c){'1'{Set-Provider Quad9}'2'{Set-Provider Mullvad}'3'{Set-Provider MullvadAdBlock}'4'{Set-Provider MullvadBase}'5'{Set-Provider MullvadExtended}'6'{Set-Provider MullvadFamily}'7'{Set-Provider MullvadAll}'8'{Set-Provider AdGuard}'V'{Test-Configuration|Out-Null}'R'{Restore-Snapshot}'D'{Reset-Dhcp}'0'{break}default{Write-Status WARN 'Invalid selection.'}}}catch{Write-Status FAIL $_.Exception.Message}
+    try{switch($c){'1'{Set-Provider Quad9}'2'{Set-Provider AdGuard}'V'{Test-Configuration|Out-Null}'R'{Restore-Snapshot}'D'{Reset-Dhcp}'0'{break}default{Write-Status WARN 'Invalid selection.'}}}catch{Write-Status FAIL $_.Exception.Message}
     if($c -eq '0'){break};Write-Host '';Read-Host '  Press Enter to continue'|Out-Null
 }

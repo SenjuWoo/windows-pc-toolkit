@@ -23,7 +23,7 @@ Before any profile or individual action, the app records the exact registry valu
 
 `%ProgramData%\WindowsPCToolkit\PrivacyGuard\Snapshots`
 
-Undo restores those values. It does not delete whole Edge, Chrome, Firefox, or Windows policy branches, so unrelated settings remain intact.
+Undo checks the snapshot's computer/user, restores those values and verifies registry types, service states and task flags. Restore failures stop the success message and show the actual error. It does not delete whole Edge, Chrome, Firefox, or Windows policy branches, so unrelated settings remain intact.
 
 ## Encrypted DNS
 

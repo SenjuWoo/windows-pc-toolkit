@@ -63,7 +63,7 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel>
           <TextBlock Text="Optimize Windows for gaming" Style="{StaticResource Heading}"/>
-          <TextBlock Text="Run the recommended profile in one click, or choose your own changes." Style="{StaticResource Description}"/>
+          <TextBlock Text="One-click gaming, cleanup, registry repair and Copilot/consumer debloat. Preview or customize before applying." Style="{StaticResource Description}"/>
           <Border Background="#19283D" Padding="16,12" CornerRadius="7" Margin="0,0,0,18">
             <StackPanel>
               <TextBlock Name="HardwareText" Text="Windows 10/11 · Hardware details load after startup" FontWeight="SemiBold"/>
@@ -79,7 +79,7 @@
         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto"><StackPanel Name="OptionsPanel"/></ScrollViewer>
         <StackPanel Grid.Row="3" Margin="0,12,0,12">
           <CheckBox Name="IncludeReviewed" Content="Also apply my selected startup entries and app removals" IsChecked="False" ToolTip="Select rows in Startup and App debloat first. They can be included in this same one-click operation and recovery report."/>
-          <TextBlock Text="Settings are backed up before changes. Cleanup deletes aged disposable files; it does not clear game shaders or your files." Foreground="#7E94B2" FontSize="12"/>
+          <TextBlock Text="App removals are named before confirmation. Package/settings backups support undo; deleted app data, Recall snapshots and temp files are not restored." Foreground="#7E94B2" FontSize="12"/>
         </StackPanel>
       </Grid>
       <Grid Name="StartupPage" Visibility="Collapsed">
@@ -106,7 +106,7 @@
           <ComboBox Name="ProviderCombo" DisplayMemberPath="Name" Height="36"/>
         </StackPanel>
         <WrapPanel Grid.Row="2"><Button Name="ApplyDns" Content="Apply encrypted DNS" Background="#68A8FF" Foreground="#10151E"/><Button Name="VerifyDns" Content="Verify"/><Button Name="RestoreDns" Content="Restore previous"/><Button Name="DhcpDns" Content="Use automatic DNS"/><Button Name="RefreshDns" Content="Refresh adapters" Margin="0,10,0,0"/></WrapPanel>
-        <TextBlock Grid.Row="3" Text="Mullvad public encrypted DNS ends November 2, 2026. Quad9 is the recommended ongoing provider.&#10;&#10;DoH encrypts DNS queries. VPN routing, public IP, browsers and unrelated adapters retain their own configuration. IPv4 and IPv6 automatic/static modes are saved separately." Foreground="#9FB5D2" Margin="0,24,0,0"/>
+        <TextBlock Grid.Row="3" Text="Mullvad public encrypted DNS ends November 2, 2026; new applies have been removed. Existing backups remain restorable. Choose Quad9 or AdGuard for ongoing service.&#10;&#10;DoH encrypts DNS queries. VPN routing, public IP, browsers and unrelated adapters retain their own configuration. IPv4 and IPv6 automatic/static modes are saved separately." Foreground="#9FB5D2" Margin="0,24,0,0"/>
       </Grid>
       <Grid Name="RecoveryPage" Visibility="Collapsed">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>

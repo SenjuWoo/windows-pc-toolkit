@@ -42,7 +42,7 @@ $script:pages=@('OptimizePage','StartupPage','AppsPage','DnsPage','RecoveryPage'
 $script:navNames=@('NavOptimize','NavStartup','NavApps','NavDns','NavRecovery','NavTools')
 $script:operationButtons=@('OptimizeButton','PreviewButton','RefreshStartup','DisableStartup','RefreshApps','RemoveApps','ApplyDns','VerifyDns','RestoreDns','DhcpDns','RefreshDns','RefreshHistory','UndoButton','RepairButton','RestorePointButton','HealthButton','OpenFixer','OpenCleaner','OpenPrivacy','OpenGaming','OpenDns')
 
-foreach ($choice in $script:catalog) {
+foreach ($choice in ($script:catalog | Sort-Object @{Expression='Default';Descending=$true},Category)) {
     $row=New-Object Windows.Controls.StackPanel
     $row.Margin=New-Object Windows.Thickness(0,0,12,14)
     $check=New-Object Windows.Controls.CheckBox
@@ -57,13 +57,7 @@ foreach ($choice in $script:catalog) {
 }
 $script:controls.ProviderCombo.ItemsSource=@(
     [pscustomobject]@{Key='Quad9';Name='Quad9 Secure - malware blocking'},
-    [pscustomobject]@{Key='AdGuard';Name='AdGuard DNS - ads and trackers'},
-    [pscustomobject]@{Key='Mullvad';Name='Mullvad - no filtering'},
-    [pscustomobject]@{Key='MullvadAdBlock';Name='Mullvad AdBlock - ads and trackers'},
-    [pscustomobject]@{Key='MullvadBase';Name='Mullvad Base - ads, trackers, malware'},
-    [pscustomobject]@{Key='MullvadExtended';Name='Mullvad Extended - adds social tracking'},
-    [pscustomobject]@{Key='MullvadFamily';Name='Mullvad Family - adds adult and gambling filters'},
-    [pscustomobject]@{Key='MullvadAll';Name='Mullvad All - maximum filtering'})
+    [pscustomobject]@{Key='AdGuard';Name='AdGuard DNS - ads and trackers'})
 $script:controls.ProviderCombo.SelectedIndex=0
 
 function Set-ToolkitBusy {
@@ -87,15 +81,15 @@ function Show-ToolkitPage {
     }
 }
 function Start-ToolkitOperation {
-    param([string]$Operation,[string[]]$Ids=@(),[string]$Path,[string]$DnsAction)
+    param([string]$Operation,[string[]]$Ids=@(),[string]$Path,[string]$DnsAction,[string[]]$ConsumerAppIds=@())
     if ($script:job) { return }
     try {
         Initialize-SuiteState
         $script:requestPath=Join-Path (Get-SuiteDataRoot) ('Requests\'+[guid]::NewGuid().ToString('N')+'.json')
-        $startupIds=@(); $appIds=@()
+        $startupIds=@(); $appIds=@($ConsumerAppIds)
         if ($Operation -eq 'Optimize' -and $script:controls.IncludeReviewed.IsChecked) {
             $startupIds=@($script:controls.StartupGrid.SelectedItems | ForEach-Object Id)
-            $appIds=@($script:controls.AppsGrid.SelectedItems | ForEach-Object Id)
+            $appIds+=@($script:controls.AppsGrid.SelectedItems | ForEach-Object Id)
         }
         $request=[pscustomobject]@{Operation=$Operation;Ids=@($Ids);Path=$Path;DnsAction=$DnsAction;StartupIds=$startupIds;AppIds=$appIds}
         Save-SuiteJson $script:requestPath $request
@@ -118,11 +112,15 @@ function Invoke-ToolkitButton {
             'OptimizeButton' {
                 $ids=@($script:catalog | Where-Object { $script:optionChecks[$_.Id].IsChecked } | ForEach-Object Id)
                 if (-not $ids.Count) { $script:controls.StatusText.Text='Choose at least one action.'; return }
-                if ($script:controls.IncludeReviewed.IsChecked -and $script:controls.AppsGrid.SelectedItems.Count) {
-                    $apps=@($script:controls.AppsGrid.SelectedItems | ForEach-Object Name) -join "`n"
-                    if ([Windows.MessageBox]::Show("This optimization also removes the selected consumer apps and their app data. Package reinstall backups are saved.`n`n$apps",'Optimize with selected app removals','YesNo','Question','No') -ne 'Yes') { return }
+                $apps=@()
+                if ($ids -contains 'Debloat') { $apps+=@(Get-SuiteAppCatalog) }
+                if ($script:controls.IncludeReviewed.IsChecked) { $apps+=@($script:controls.AppsGrid.SelectedItems) }
+                $apps=@($apps | Sort-Object Id -Unique)
+                if ($apps.Count) {
+                    $names=@($apps.Name) -join "`n"
+                    if ([Windows.MessageBox]::Show("Optimize with these consumer app removals? Their app data may be deleted. Verified package reinstall backups are saved first.`n`n$names",'Optimize and debloat','YesNo','Question','No') -ne 'Yes') { return }
                 }
-                Start-ToolkitOperation 'Optimize' $ids
+                Start-ToolkitOperation 'Optimize' $ids -ConsumerAppIds @($apps | ForEach-Object Id)
             }
             'PreviewButton' { Start-ToolkitOperation 'Preview' @($script:catalog | Where-Object { $script:optionChecks[$_.Id].IsChecked } | ForEach-Object Id) }
             'RecommendedButton' { foreach ($choice in $script:catalog) { $script:optionChecks[$choice.Id].IsChecked=$choice.Default } }

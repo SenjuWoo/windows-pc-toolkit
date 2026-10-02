@@ -41,7 +41,8 @@ foreach($bat in Get-ChildItem -LiteralPath $root -Recurse -Filter '*.bat' -File 
 Write-Host "`nChecking encrypted DNS templates..." -ForegroundColor Cyan
 $dns=Get-Content -LiteralPath $dnsManager -Raw
 if($dns -match "Template='http://"){$failed=$true;Write-Host '[FAIL] Plain HTTP DoH template found.' -ForegroundColor Red}
-foreach($required in @('https://dns.quad9.net/dns-query','https://dns.mullvad.net/dns-query','https://adblock.dns.mullvad.net/dns-query')){if($dns -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing DoH template: $required" -ForegroundColor Red}}
+foreach($required in @('https://dns.quad9.net/dns-query','https://dns.adguard-dns.com/dns-query')){if($dns -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing DoH template: $required" -ForegroundColor Red}}
+if($dns -match '(?m)^\s*Mullvad\w*\s*='){$failed=$true;Write-Host '[FAIL] Retiring Mullvad profiles must not be offered for new applies.' -ForegroundColor Red}
 foreach($required in @('9.9.9.9','149.112.112.112','2620:fe::fe','2620:fe::fe:9')){if($dns -notmatch [regex]::Escape($required)){$failed=$true;Write-Host "[FAIL] Missing Quad9 secure-profile address: $required" -ForegroundColor Red}}
 if($dns -match [regex]::Escape("'2620:fe::9'")){$failed=$true;Write-Host '[FAIL] Quad9 address 2620:fe::9 belongs to a different service family.' -ForegroundColor Red}
 if($dns -notmatch 'Add-DohEntry[^\r\n]+-Fallback\s+\$false[^\r\n]+-Upgrade\s+\$true'){$failed=$true;Write-Host '[FAIL] DNS profile application does not force DoH with UDP fallback disabled.' -ForegroundColor Red}
