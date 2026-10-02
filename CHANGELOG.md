@@ -12,7 +12,7 @@
 - Privacy 2.1: fail closed on unreadable registry snapshot state; verify registry/service/task undo and surface restore failures.
 - Default AI/consumer debloat: modern Copilot AppX removal, checked Recall optional-feature disabling and Edge built-in model/API policies. Package and feature-state recovery; data-deletion limits remain explicit.
 - Normalize short/long Windows Temp paths in shared cleanup, fixing skipped deletions for accounts using 8.3 aliases.
-- 88 native Windows regression/boundary checks, fresh-package WPF/worker tests, expanded CI, actual dashboard render and rewritten documentation.
+- 89 native Windows regression/boundary checks, fresh-package WPF/worker tests, expanded CI, actual dashboard render and rewritten documentation.
 - Recommend optimizerDuck in the dashboard and GitHub README, with an explicit coverage map. No Duck source or executable is bundled.
 ## Toolkit v2.1.3 (2026-09-18)
 

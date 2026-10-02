@@ -286,7 +286,10 @@ try {
     Set-AdapterDnsFamilies -Index 7 -IPv4 @('9.9.9.9') -IPv6 @()
     $families=& $network { $script:Families }
     Check (($families[2] -join ',') -eq '9.9.9.9' -and @($families[23]).Count -eq 0) 'IPv4 static + IPv6 automatic remains distinct'
-    . (Join-Path $root 'dns-encrypted-doh\DNS_Manager.ps1') -Action Library
+    $dnsSource=Join-Path $root 'dns-encrypted-doh\DNS_Manager.ps1'
+    if (-not (Test-Path -LiteralPath $dnsSource)) { $dnsSource=Join-Path $root 'Pc Privacy Guard\Optional DNS\DNS_Manager.ps1' }
+    Check (Test-Path -LiteralPath $dnsSource) 'DNS regression library resolves the actual installed folder layout'
+    . $dnsSource -Action Library
     Check ($Providers.Count -eq 2 -and $Providers.Contains('Quad9') -and $Providers.Contains('AdGuard')) 'Only ongoing DNS providers are offered'
     Expect-Failure { Set-Provider MullvadAdBlock } 'Retiring Mullvad apply fails before initialization or DNS mutation'
     $StateRoot=Join-Path $fixture 'Dns'; [void][IO.Directory]::CreateDirectory($StateRoot)
