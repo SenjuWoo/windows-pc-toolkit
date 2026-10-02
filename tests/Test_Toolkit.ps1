@@ -25,6 +25,19 @@ try {
     }
     Import-Module (Join-Path $root 'Modules\Toolkit.Core.psm1') -ArgumentList (Join-Path $fixture 'State') -Force -DisableNameChecking
     $module=Get-Module Toolkit.Core
+    # Exercise the real Win32 UInt32 boundary, not a stay-awake mock.
+    & $module {
+        try {
+            Enable-StayAwake
+            $previous=[StayAwake.Native]::SetThreadExecutionState([uint32]2147483648)
+            if (($previous -band 1) -ne 1) { throw 'The real system-required flag was not set.' }
+            Disable-StayAwake
+            if (([StayAwake.Native]::SetThreadExecutionState([uint32]2147483648) -band 1) -ne 0) { throw 'The real system-required flag was not released.' }
+        } finally { Disable-StayAwake }
+    }
+    Check $true 'Real Win32 stay-awake enable/release accepts unsigned flags and clears the request'
+    $sfcHelp=Invoke-SuiteNative "$env:SystemRoot\System32\sfc.exe" @('/?') @(0,1)
+    Check ($sfcHelp.Output.Length -gt 0 -and $sfcHelp.Output.IndexOf([char]0) -eq -1) 'Real read-only SFC help/error output decodes UTF-16LE without embedded NULs'
     $catalog=@(Get-SuiteActionCatalog)
     Check (@($catalog.Id | Select-Object -Unique).Count -eq $catalog.Count) 'Unique action identifiers'
     Check (@($catalog | Where-Object Default).Count -eq 10) 'Recommended profile includes gaming, cleanup, registry care and AI/consumer debloat'
@@ -235,7 +248,9 @@ try {
     $fresh=Join-Path $fixture "fresh toolkit's folder 玩家"
     [void][IO.Directory]::CreateDirectory($fresh)
     $friendlyFolders=@{'pc-cleaner'='Pc Cleaner';'pc-gaming-optimizer'='Pc Gaming Optimizer';'dns-encrypted-doh'='Pc Privacy Guard\Optional DNS'}
-    foreach ($dir in @('Modules','pc-cleaner','pc-gaming-optimizer','dns-encrypted-doh')) {
+    $friendlyFolders['pc-corruption-fixer']='Pc Corruption Fixer'
+    $friendlyFolders['pc-privacy-guard']='Pc Privacy Guard'
+    foreach ($dir in @('Modules','pc-cleaner','pc-gaming-optimizer','dns-encrypted-doh','pc-corruption-fixer','pc-privacy-guard')) {
         $source=Join-Path $root $dir
         if (-not (Test-Path -LiteralPath $source)) { $source=Join-Path $root $friendlyFolders[$dir] }
         Copy-Item -LiteralPath $source -Destination (Join-Path $fresh $dir) -Recurse
@@ -267,6 +282,89 @@ try {
     }
     Check ($script:controls.StatusText.Text -eq 'Preview only. No Windows settings changed.') 'Real WPF preview button finishes its background worker'
     Check ($script:controls.ResultText.Text -match 'Windows Game Mode' -and $script:controls.OptimizeButton.IsEnabled) 'WPF result text and controls refresh after completion'
+
+    # A real disposable console executable replaces only DISM/SFC. The actual
+    # button, job, worker, repair orchestration, P/Invoke, native process runner,
+    # journal and timer remain in use. No system repair or live mutation runs.
+    $repairExe=Join-Path $fixture 'RepairFixture.exe'
+    Add-Type -OutputAssembly $repairExe -OutputType ConsoleApplication -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+public static class RepairFixture {
+    public static int Main(string[] args) {
+        string tool=Path.GetFileName(args[0]);
+        File.AppendAllText(args[1]+".calls", tool+"\n");
+        string output=tool+" "+String.Join(" ", args, 2, args.Length-2)+"\nrepair-output-marker\n";
+        string scenario=File.ReadAllText(args[1]);
+        if (scenario=="Fail" && tool=="dism.exe") { Console.Error.WriteLine("repair-failure-marker"); return 5; }
+        if (tool=="sfc.exe") {
+            byte[] bytes=Encoding.Unicode.GetBytes(output);
+            using (var stream=Console.OpenStandardOutput()) { stream.Write(bytes, 0, bytes.Length); }
+        } else { Console.WriteLine(output); }
+        return scenario=="Restart" && tool=="dism.exe" ? 3010 : 0;
+    }
+}
+'@
+    $scenarioPath=Join-Path $fixture 'repair-scenario.txt'
+    $bootstrap=@'
+$script:SuiteDataRoot='__STATE__'
+$script:FixtureRepairExe='__EXE__'
+$script:FixtureScenario='__SCENARIO__'
+$script:FixtureNative=${function:Invoke-SuiteNative}
+function Assert-Administrator { }
+function Test-Path {
+    param($LiteralPath)
+    if ($LiteralPath -like 'HKLM:*RebootPending' -or $LiteralPath -like 'HKLM:*RebootRequired') { return $false }
+    Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath
+}
+function Invoke-SuiteNative {
+    param($File,$Arguments,$SuccessCodes)
+    if ([IO.Path]::GetFileName($File) -notin @('dism.exe','sfc.exe')) { throw 'Unexpected repair executable' }
+    $encoding=if ([IO.Path]::GetFileName($File) -eq 'sfc.exe') { [Text.Encoding]::Unicode } else { $null }
+    & $script:FixtureNative $script:FixtureRepairExe (@($File,$script:FixtureScenario)+@($Arguments)) $SuccessCodes $encoding
+}
+'@
+    $bootstrap=$bootstrap.Replace('__STATE__',(Join-Path $fixture 'RepairState').Replace("'","''")).Replace('__EXE__',$repairExe.Replace("'","''")).Replace('__SCENARIO__',$scenarioPath.Replace("'","''"))
+    Add-Content -LiteralPath (Join-Path $fresh 'Modules\Toolkit.Core.psm1') -Value $bootstrap -Encoding UTF8
+    foreach ($scenario in @('Success','Fail','Restart')) {
+        [IO.File]::WriteAllText($scenarioPath,$scenario)
+        [IO.File]::WriteAllText($scenarioPath+'.calls','')
+        $script:controls.RepairButton.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)))
+        $script:timer.Start(); $frame=New-Object Windows.Threading.DispatcherFrame
+        $deadline=(Get-Date).AddSeconds(30); $poll.Start()
+        try { [Windows.Threading.Dispatcher]::PushFrame($frame) }
+        finally {
+            $poll.Stop(); $script:timer.Stop()
+            if ($script:job) { Stop-Job $script:job; Remove-Job $script:job -Force; $script:job=$null; throw 'Repair worker timed out.' }
+        }
+        $result=Get-Content -LiteralPath ($script:requestPath+'.result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $expected=if ($scenario -eq 'Fail') { 'CompletedWithErrors' } else { 'Completed' }
+        Check ($result.Status -eq $expected -and $script:controls.RepairButton.IsEnabled) "Real repair button/worker/timer completes $scenario and re-enables controls"
+        $calls=@([IO.File]::ReadAllLines($scenarioPath+'.calls'))
+        Check ($calls[0] -eq 'dism.exe' -and ($calls.Count -eq 1) -eq ($scenario -eq 'Fail') -and ($scenario -eq 'Fail' -or $calls[1] -eq 'sfc.exe')) "Repair runs DISM before SFC and stops on failure: $scenario"
+        Check ($script:controls.ResultText.Text -match $(if ($scenario -eq 'Fail') { 'repair-failure-marker' } else { 'repair-output-marker' }) -and $script:controls.ResultText.Text -match 'Report:') "Repair preserves actual native output and recovery report: $scenario"
+        if ($scenario -eq 'Restart') { Check ($script:controls.ResultText.Text -match 'Restart required') 'Repair reports native restart-required exit code without restarting Windows' }
+    }
+    # Previously Disable-StayAwake threw before the mutex release in finally.
+    $mutex=Enter-SuiteOperation
+    try { Check $true 'Repair success/failure cleanup releases the shared operation mutex' }
+    finally { $mutex.ReleaseMutex(); $mutex.Dispose() }
+    foreach ($candidate in @('pc-corruption-fixer\PC_Fixer.ps1','pc-cleaner\PC_Cleaner.ps1','pc-privacy-guard\PC_Privacy.ps1','pc-gaming-optimizer\PC_Optimizer.ps1','dns-encrypted-doh\DNS_Manager.ps1')) {
+        Check (Test-Path -LiteralPath (Join-Path $fresh $candidate)) "Fresh bundle contains console target: $candidate"
+    }
+    foreach ($button in @('RefreshStartup','RefreshApps','RefreshDns','RefreshHistory','HealthButton')) {
+        $script:controls[$button].RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)))
+        $script:timer.Start(); $frame=New-Object Windows.Threading.DispatcherFrame
+        $deadline=(Get-Date).AddSeconds(30); $poll.Start()
+        try { [Windows.Threading.Dispatcher]::PushFrame($frame) }
+        finally {
+            $poll.Stop(); $script:timer.Stop()
+            if ($script:job) { Stop-Job $script:job; Remove-Job $script:job -Force; $script:job=$null; throw "$button worker timed out." }
+        }
+        $result=Get-Content -LiteralPath ($script:requestPath+'.result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        Check ($result.Status -eq 'Completed' -and $script:controls[$button].IsEnabled) "Actual read-only $button button/worker completes against native Windows inventories"
+    }
     $native=Invoke-SuiteNative "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @('-NoProfile','-Command','[Console]::Error.WriteLine("failure-marker"); exit 7') @(7)
     Check ($native.ExitCode -eq 7 -and $native.Output -match 'failure-marker') 'Native stderr and exit code are captured without pipe deadlock'
     Expect-Failure { Invoke-SuiteNative "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @('-NoProfile','-Command','exit 7') } 'Native failure cannot be reported as success'
@@ -280,6 +378,7 @@ try {
         function script:Set-DnsClientServerAddress { param($InputObject,$ServerAddresses,[switch]$ResetServerAddresses) $script:Families[[int]$InputObject.AddressFamily]=if ($ResetServerAddresses) { @() } else { @($ServerAddresses) } }
     }
     & $network $networkFakes
+    Check (& $network { (Get-Command Set-DnsClientServerAddress).CommandType -eq 'Function' -and (Get-Command Set-DnsClientServerAddress).ScriptBlock.ToString().Contains('$script:Families') }) 'DNS mutation resolves to the in-memory fixture before family tests'
     Set-AdapterDnsFamilies -Index 7 -IPv4 @() -IPv6 @('2001:db8::9')
     $families=& $network { $script:Families }
     Check (@($families[2]).Count -eq 0 -and ($families[23] -join ',') -eq '2001:db8::9') 'IPv4 automatic + IPv6 static remains distinct'
@@ -312,6 +411,7 @@ try {
     # DNS library imports the shared module afresh; rebind its mutation fakes.
     $network=Get-Module Network.State
     & $network $networkFakes
+    Check (& $network { (Get-Command Set-DnsClientServerAddress).CommandType -eq 'Function' -and (Get-Command Set-DnsClientServerAddress).ScriptBlock.ToString().Contains('$script:Families') }) 'DNS mutation remains isolated after library re-import and before restore tests'
     $fixtureGuid=[guid]::NewGuid()
     $legacyDns=[pscustomobject]@{Schema=3;Adapters=@([pscustomobject]@{Name='Original NIC';InterfaceGuid=$fixtureGuid.ToString();InterfaceIndex=7;Automatic=$false;StaticIPv4=@('9.9.9.9');StaticIPv6=@()});Encryption=@();TouchedServers=@();CurrentProvider=$null}
     $legacyPath=Join-Path $fixture 'legacy-dns.json'; Save-SuiteJson $legacyPath $legacyDns

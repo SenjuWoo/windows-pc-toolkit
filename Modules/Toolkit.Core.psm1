@@ -220,10 +220,13 @@ function Get-SuiteAppCatalog {
     }
 }
 function Invoke-SuiteNative {
-    param([string]$File,[string[]]$Arguments,[int[]]$SuccessCodes=@(0))
+    param([string]$File,[string[]]$Arguments,[int[]]$SuccessCodes=@(0),[Text.Encoding]$OutputEncoding)
     $psi=New-Object Diagnostics.ProcessStartInfo
     $psi.FileName=$File; $psi.UseShellExecute=$false; $psi.CreateNoWindow=$true
     $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true
+    # SFC writes UTF-16LE without a BOM when redirected, including errors.
+    if (-not $OutputEncoding -and [IO.Path]::GetFileName($File) -eq 'sfc.exe') { $OutputEncoding=[Text.Encoding]::Unicode }
+    if ($OutputEncoding) { $psi.StandardOutputEncoding=$OutputEncoding; $psi.StandardErrorEncoding=$OutputEncoding }
     $psi.Arguments=(@($Arguments | ForEach-Object { '"'+(($_ -replace '(\\*)"','$1$1\"') -replace '(\\+)$','$1$1')+'"' }) -join ' ')
     $process=New-Object Diagnostics.Process; $process.StartInfo=$psi
     try {
@@ -514,7 +517,7 @@ function Invoke-SuiteRepair {
     $lock=Enter-SuiteOperation
     try {
         $run=New-SuiteRun 'Repair'
-        Enable-StayAwake
+        try { Enable-StayAwake } catch { Add-SuiteStep $run 'Stay awake' 'Warning' $_.Exception.Message }
         foreach ($step in @(
             @{Name='DISM component-store repair';File='dism.exe';Args=@('/Online','/Cleanup-Image','/RestoreHealth')},
             @{Name='SFC system-file scan';File='sfc.exe';Args=@('/scannow')})) {
@@ -526,9 +529,12 @@ function Invoke-SuiteRepair {
             } catch { Add-SuiteStep $run $step.Name 'Failed' $_.Exception.Message; break }
         }
         $run.Status=if (@($run.Steps | Where-Object Status -eq 'Failed').Count) { 'CompletedWithErrors' } else { 'Completed' }
-        $run.Message='Repair commands finished. Review the saved DISM/SFC output for the corruption verdict. No automatic restart.'
+        $run.Message=if ($run.Status -eq 'CompletedWithErrors') { 'Repair stopped after a failed command. Review its output below or in Recovery. No automatic restart.' } else { 'Repair commands finished. Review the saved DISM/SFC output for the corruption verdict. No automatic restart.' }
         Save-SuiteJson $run.Path $run; return $run
-    } finally { Disable-StayAwake; $lock.ReleaseMutex(); $lock.Dispose() }
+    } finally {
+        try { Disable-StayAwake } catch { Write-Warning $_.Exception.Message }
+        finally { $lock.ReleaseMutex(); $lock.Dispose() }
+    }
 }
 
 Export-ModuleMember -Function *-Suite*
