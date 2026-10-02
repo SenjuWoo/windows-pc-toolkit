@@ -488,9 +488,14 @@ using System.Runtime.InteropServices;
 namespace StayAwake { public static class Native { [DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags); } }
 '@
     }
-    [void][StayAwake.Native]::SetThreadExecutionState(0x80000001)
+    # Windows PowerShell treats high-bit hexadecimal literals as signed Int32.
+    if ([StayAwake.Native]::SetThreadExecutionState([uint32]2147483649) -eq 0) { throw 'Windows could not enable the temporary stay-awake request.' }
 }
-function Disable-StayAwake { if ('StayAwake.Native' -as [type]) { [void][StayAwake.Native]::SetThreadExecutionState(0x80000000) } }
+function Disable-StayAwake {
+    if ('StayAwake.Native' -as [type]) {
+        if ([StayAwake.Native]::SetThreadExecutionState([uint32]2147483648) -eq 0) { throw 'Windows could not release the temporary stay-awake request.' }
+    }
+}
 
 function Invoke-GameBooster {
     $procs=@(Get-Process | Where-Object { $_.MainWindowTitle } | Sort-Object ProcessName)

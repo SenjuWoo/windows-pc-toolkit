@@ -12,8 +12,12 @@
 - Privacy 2.1: fail closed on unreadable registry snapshot state; verify registry/service/task undo and surface restore failures.
 - Default AI/consumer debloat: modern Copilot AppX removal, checked Recall optional-feature disabling and Edge built-in model/API policies. Package and feature-state recovery; data-deletion limits remain explicit.
 - Normalize short/long Windows Temp paths in shared cleanup, fixing skipped deletions for accounts using 8.3 aliases.
-- 89 native Windows regression/boundary checks, fresh-package WPF/worker tests, expanded CI, actual dashboard render and rewritten documentation.
+- Fix the Windows PowerShell signed/unsigned stay-awake flag error that prevented dashboard Windows repair and game-session mode from starting. Repair cleanup always releases the operation mutex and shows failed-command output.
+- Decode SFC's redirected UTF-16LE output correctly instead of displaying embedded NUL characters; test its real read-only help/error output.
+- 114 native Windows regression/boundary checks, including the real stay-awake API, repair-button/worker/native-process success/failure/restart paths, inventory buttons, fresh-package WPF tests and both folder layouts in CI.
 - Recommend optimizerDuck in the dashboard and GitHub README, with an explicit coverage map. No Duck source or executable is bundled.
+- Publish one complete portable ZIP with checksums and commit/CI provenance; keep shared modules with the tools. See [v3.0.0 release notes](docs/releases/v3.0.0.md).
+
 ## Toolkit v2.1.3 (2026-09-18)
 
 Launcher fixes across the suite - the same silent-failure bug that broke the PC Cleaner start affected **eight more launchers** (all six DNS launchers, PC Privacy Guard, and both Gaming Optimizer launchers). The Encrypted DNS Manager not opening was this exact bug.

@@ -4,13 +4,17 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
+**[Download v3.0.0](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.0/Windows-PC-Toolkit-3.0.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.0)
+
 ![Toolkit dashboard](docs/images/dashboard.png)
 
 Rendered from the actual WPF dashboard with initial selections. Hardware and results load on the target PC.
 
 ## Start here
 
-Download the **complete current source** with GitHub's **Code → Download ZIP**, extract it, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together. Older releases do not contain this dashboard.
+Download the **[complete v3.0.0 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.0/Windows-PC-Toolkit-3.0.0.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools now depend on the complete bundle. Older releases do not contain this dashboard.
+
+For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
 **Optimize now** applies ten recommended actions together:
 
@@ -44,7 +48,7 @@ The gaming console adds HAGS controls, temporary game-session priority/stay-awak
 
 ## Compatibility and registry care
 
-The recommended profile preserves Windows Update, Defender, Store, Xbox, Gaming Services, browser state, AI model stores, drivers, power/sleep, shaders, network offloads, timers and GPU interrupt settings. It does not mass-disable services or reset networking. Consumer-AppX removal is a visible default choice with a named confirmation; Store, Xbox, Gaming Services, WebView and frameworks are excluded.
+The recommended profile preserves Windows Update, Defender, Store, Xbox, Gaming Services, browser state, separate local-AI model stores, drivers, power/sleep, shaders, network offloads, timers and GPU interrupt settings. It does not mass-disable services or reset networking. Consumer-AppX removal is a visible default choice with a named confirmation; Store, Xbox, Gaming Services, WebView and frameworks are excluded.
 
 Strict privacy, network reset and shader troubleshooting remain explicit advanced choices. No optimizer guarantees FPS gains or policy effects on every edition/build. Registry read-back proves a saved setting, not better frame times.
 
@@ -52,7 +56,7 @@ Strict privacy, network reset and shader troubleshooting remain explicit advance
 
 ## Encrypted DNS
 
-Existing DoH entries are updated in place. Restore matches adapter GUIDs and separately preserves IPv4/IPv6 automatic versus static modes. Unrelated adapters, VPNs and other providers' DoH entries are preserved. Failed apply attempts rollback and reports any rollback failure.
+Existing DoH entries are updated in place. Restore matches adapter GUIDs and separately preserves IPv4/IPv6 automatic versus static modes. Unrelated adapters, VPNs and other providers' DoH entries are preserved. Failed apply attempts restore the previous state and report any rollback failure.
 
 Quad9 requires its live TXT transport test to report `doh`; an unavailable test fails verification. AdGuard checks configuration/resolution without claiming the same live attestation.
 
