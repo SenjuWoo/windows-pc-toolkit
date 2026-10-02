@@ -150,6 +150,13 @@ try {
         if (-not (Test-Path -LiteralPath $oldFixture)) { break }
         Start-Sleep -Milliseconds 250
     }
+    if (Test-Path -LiteralPath $oldFixture) {
+        $diagnostic=& $module { param($path,$testRoot)
+            $file=Get-Item -LiteralPath $path -Force
+            [pscustomobject]@{Root=$testRoot;FullName=$file.FullName;Roots=@(Get-SuiteTempRoots);LinkBoundary=(Test-SuitePathWithoutLinks $file.FullName $testRoot);Candidates=@(Get-SuiteOldTempFiles | ForEach-Object FullName);Write=$file.LastWriteTime;Access=$file.LastAccessTime;Attributes=[string]$file.Attributes}
+        } $oldFixture $tempRoot
+        throw "TEST FAILED: Old disposable file actually removed. $summary Diagnostics: $($diagnostic | ConvertTo-Json -Depth 4 -Compress)"
+    }
     Check (-not (Test-Path -LiteralPath (Join-Path $tempRoot 'old.tmp'))) 'Old disposable file actually removed'
     Check (Test-Path -LiteralPath (Join-Path $tempRoot 'new.tmp')) 'Recent temp file preserved'
     Check (Test-Path -LiteralPath (Join-Path $tempRoot 'accessed.tmp')) 'Old but recently accessed temp file preserved'
