@@ -1,6 +1,7 @@
 ﻿#requires -version 5.1
-param([switch]$SmokeTest,[string]$RenderPreview,[string]$ExpectedUserSid)
+param([switch]$SmokeTest,[string]$RenderPreview,[string]$ExpectedUserSid,[switch]$DebugLog)
 $ErrorActionPreference='Stop'
+if ($DebugLog) { $env:WINDOWS_PC_TOOLKIT_DEBUG='1' }
 trap {
     if ($SmokeTest -or $RenderPreview) { Write-Error $_; exit 1 }
     try { [void][Windows.MessageBox]::Show('Toolkit could not start. Extract the complete toolkit. '+$_.Exception.Message,'Windows PC Toolkit') }
@@ -14,18 +15,20 @@ $principal=New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $SmokeTest -and -not $RenderPreview -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $escaped=$PSCommandPath.Replace("'","''")
     $command="& '$escaped' -ExpectedUserSid '$ExpectedUserSid'"
+    if ($env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1') { $command+=' -DebugLog' }
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
     $psi=New-Object Diagnostics.ProcessStartInfo
     $psi.FileName="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     $psi.Arguments="-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encoded"
     $psi.UseShellExecute=$true; $psi.Verb='runas'
-    try { [void][Diagnostics.Process]::Start($psi) }
+    try { $elevated=[Diagnostics.Process]::Start($psi); $elevated.WaitForExit(); $code=$elevated.ExitCode; $elevated.Dispose(); exit $code }
     catch { [void][Windows.MessageBox]::Show('Administrator launch did not complete. '+$_.Exception.Message,'Windows PC Toolkit'); exit 1 }
     exit 0
 }
 if (-not $SmokeTest -and -not $RenderPreview -and $identity.User.Value -ne $ExpectedUserSid) { throw 'Start the toolkit with administrator rights for your own account so settings apply to the correct Windows user.' }
 
 Import-Module (Join-Path $PSScriptRoot 'Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
+Write-SuiteDiagnostic 'Dashboard startup' "DataRoot=$(Get-SuiteDataRoot); Debug=$($env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'); SmokeTest=$SmokeTest"
 [xml]$markup=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Toolkit.xaml') -Raw -Encoding UTF8
 $reader=New-Object Xml.XmlNodeReader($markup)
 $script:window=[Windows.Markup.XamlReader]::Load($reader)
@@ -63,6 +66,9 @@ $script:controls.ProviderCombo.SelectedIndex=0
 function Set-ToolkitBusy {
     param([bool]$Busy)
     foreach ($name in $script:operationButtons) { $script:controls[$name].IsEnabled=(-not $Busy) }
+    $script:controls.RecommendedButton.IsEnabled=(-not $Busy)
+    $script:controls.IncludeReviewed.IsEnabled=(-not $Busy)
+    foreach ($check in $script:optionChecks.Values) { $check.IsEnabled=(-not $Busy) }
     $script:controls.BusyBar.Visibility=if ($Busy) { 'Visible' } else { 'Collapsed' }
 }
 function Show-ToolkitPage {
@@ -87,23 +93,26 @@ function Start-ToolkitOperation {
         Initialize-SuiteState
         $script:requestPath=Join-Path (Get-SuiteDataRoot) ('Requests\'+[guid]::NewGuid().ToString('N')+'.json')
         $startupIds=@(); $appIds=@($ConsumerAppIds)
-        if ($Operation -eq 'Optimize' -and $script:controls.IncludeReviewed.IsChecked) {
+        if ($Operation -in @('Optimize','Preview') -and $script:controls.IncludeReviewed.IsChecked) {
             $startupIds=@($script:controls.StartupGrid.SelectedItems | ForEach-Object Id)
             $appIds+=@($script:controls.AppsGrid.SelectedItems | ForEach-Object Id)
         }
         $request=[pscustomobject]@{Operation=$Operation;Ids=@($Ids);Path=$Path;DnsAction=$DnsAction;StartupIds=$startupIds;AppIds=$appIds}
         Save-SuiteJson $script:requestPath $request
+        Write-SuiteDiagnostic 'Dashboard operation' "$Operation; profile=$($Ids -join ','); startup=$($startupIds.Count); apps=$($appIds.Count)"
         $script:operation=$Operation; $script:progressStamp=''
         $script:controls.StatusText.Text="Running: $Operation"
         $script:controls.ResultText.Text=''; $script:controls.ResultText.Visibility='Visible'
         Set-ToolkitBusy $true
         $script:job=Start-Job -ScriptBlock { param($worker,$request) & $worker -RequestPath $request } -ArgumentList (Join-Path $PSScriptRoot 'Toolkit.Worker.ps1'),$script:requestPath
-    } catch { Set-ToolkitBusy $false; $script:controls.StatusText.Text='Failed: '+$_.Exception.Message }
+    } catch { Write-SuiteDiagnostic 'Dashboard operation' $_.Exception.Message 'Error'; Set-ToolkitBusy $false; $script:controls.StatusText.Text='Failed: '+$_.Exception.Message }
 }
 function Open-ToolkitConsole {
     param([string[]]$Candidates)
     $path=Resolve-SuitePath $Candidates
-    Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$path+'"') -WindowStyle Normal
+    $arguments='-NoProfile -STA -ExecutionPolicy Bypass -File "'+$path+'"'
+    if ([IO.Path]::GetFileName($path) -ne 'DNS_Manager.ps1') { $arguments+=' -ExpectedUserSid "'+(Get-SuiteIdentity)+'"' }
+    Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $arguments -WindowStyle Normal
 }
 function Invoke-ToolkitButton {
     param($sender,$eventArgs)
@@ -111,7 +120,7 @@ function Invoke-ToolkitButton {
         switch ($sender.Name) {
             'OptimizeButton' {
                 $ids=@($script:catalog | Where-Object { $script:optionChecks[$_.Id].IsChecked } | ForEach-Object Id)
-                if (-not $ids.Count) { $script:controls.StatusText.Text='Choose at least one action.'; return }
+                if (-not $ids.Count -and -not ($script:controls.IncludeReviewed.IsChecked -and ($script:controls.StartupGrid.SelectedItems.Count -or $script:controls.AppsGrid.SelectedItems.Count))) { $script:controls.StatusText.Text='Choose an action or reviewed startup/app selections.'; return }
                 $apps=@()
                 if ($ids -contains 'Debloat') { $apps+=@(Get-SuiteAppCatalog) }
                 if ($script:controls.IncludeReviewed.IsChecked) { $apps+=@($script:controls.AppsGrid.SelectedItems) }
@@ -160,7 +169,7 @@ function Invoke-ToolkitButton {
             'DuckLink' { Start-Process 'https://github.com/itsfatduck/optimizerDuck' }
             'SourceLink' { Start-Process 'https://github.com/SenjuWoo/windows-pc-toolkit' }
         }
-    } catch { $script:controls.StatusText.Text='Failed: '+$_.Exception.Message }
+    } catch { Write-SuiteDiagnostic 'Dashboard button' $_.Exception.Message 'Error'; $script:controls.StatusText.Text='Failed: '+$_.Exception.Message }
 }
 for ($i=0; $i -lt $script:navNames.Count; $i++) {
     $button=$script:controls[$script:navNames[$i]]; $button.Tag=$i
@@ -210,6 +219,7 @@ $script:timer.Add_Tick({
         } else { $script:controls.ResultText.Text=$result.Message }
         Remove-Job $script:job -Force; $script:job=$null; Set-ToolkitBusy $false
     } catch {
+        Write-SuiteDiagnostic 'Dashboard result' $_.Exception.Message 'Error'
         $script:controls.StatusText.Text='Failed: '+$_.Exception.Message
         if ($script:job -and $script:job.State -in @('Completed','Failed','Stopped')) { Remove-Job $script:job -Force; $script:job=$null; Set-ToolkitBusy $false }
     }

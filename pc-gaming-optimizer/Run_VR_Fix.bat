@@ -1,35 +1,21 @@
 @echo off
-title PC VR Fix
-setlocal EnableExtensions
+title PC VR Readiness Audit v5.0.1
+setlocal EnableExtensions DisableDelayedExpansion
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LOG=%LOCALAPPDATA%\Temp\GamingVR_launch.log"
-set "FLAG=%LOCALAPPDATA%\Temp\GamingVR_elevated.flag"
-
-net session >nul 2>&1
-if errorlevel 1 (
-    echo [%date% %time%] not elevated - requesting administrator rights >> "%LOG%"
-    del "%FLAG%" >nul 2>&1
-    "%PS%" -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs" >> "%LOG%" 2>&1
-    "%SystemRoot%\System32\ping.exe" -n 7 127.0.0.1 >nul
-    if not exist "%FLAG%" (
-        echo [%date% %time%] elevation did not complete >> "%LOG%"
-        echo.
-        echo Elevation did not complete - no administrator window appeared.
-        echo Right-click this .bat and choose "Run as administrator".
-        echo Log: %LOG%
-        pause
-    )
-    exit /b
-)
-
-echo [%date% %time%] elevated start >> "%LOG%"
-echo elevated > "%FLAG%"
-"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Fix_VR_PCVR.ps1"
+set "TOOLKIT_LAUNCHER=%~f0"
+"%PS%" -NoProfile -Command "$p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 }; exit 1"
+if errorlevel 1 goto :elevate
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0Fix_VR_PCVR.ps1" -ExpectedUserSid "%~1"
 set "RC=%ERRORLEVEL%"
+goto :finish
+:elevate
+"%PS%" -NoProfile -Command "try { $p=Start-Process -FilePath $env:TOOLKIT_LAUNCHER -ArgumentList ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -Verb RunAs -Wait -PassThru -ErrorAction Stop; exit $p.ExitCode } catch { Write-Error $_; exit 1 }" >> "%LOG%" 2>&1
+set "RC=%ERRORLEVEL%"
+:finish
 echo [%date% %time%] Fix_VR_PCVR.ps1 exited with %RC% >> "%LOG%"
 if not "%RC%"=="0" (
-    echo.
-    echo PC Gaming Optimizer exited with code %RC%. Log: %LOG%
+    echo Toolkit exited with code %RC%. Log: %LOG%
     pause
 )
 exit /b %RC%

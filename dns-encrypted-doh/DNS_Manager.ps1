@@ -1,6 +1,6 @@
 ﻿#requires -version 5.1
 <#[
-Encrypted DNS Manager v2.2
+Encrypted DNS Manager v2.2.1
 Configures one coherent provider at a time. Every configured DNS IP is paired
 with its official HTTPS DoH template, UDP fallback is disabled, and prior DNS
 state is saved for exact rollback.
@@ -9,19 +9,32 @@ param(
     [ValidateSet('Menu','Library','Quad9','AdGuard','Mullvad','MullvadAdBlock','MullvadBase','MullvadExtended','MullvadFamily','MullvadAll','Verify','Restore','DHCP')]
     [string]$Action='Menu',
     [int[]]$InterfaceIndex,
-    [string]$SnapshotPath
+    [string]$SnapshotPath,
+    [switch]$DebugLog
 )
 
 $ErrorActionPreference='Stop'
 $networkModule=@((Join-Path $PSScriptRoot '..\Modules\Network.State.psm1'),(Join-Path $PSScriptRoot '..\..\Modules\Network.State.psm1')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $networkModule) { throw 'The shared network module is missing. Extract the complete toolkit.' }
 Import-Module $networkModule -Force -DisableNameChecking
-$Version='2.2'
+$Version='2.2.1'
 $StateRoot=Join-Path $env:ProgramData 'WindowsPCToolkit\EncryptedDNS'
 $SnapshotRoot=Join-Path $StateRoot 'Snapshots'
+$DnsDebug=($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1')
+$DnsLog=Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\DNS.log'
+function Write-DnsDiagnostic {
+    param([string]$Kind,[string]$Message)
+    if (-not $DnsDebug -and $Kind -notin @('FAIL','WARN')) { return }
+    try {
+        if ($Message.Length -gt 4096) { $Message=$Message.Substring(0,4096) }
+        [IO.Directory]::CreateDirectory((Split-Path $DnsLog -Parent))|Out-Null
+        [pscustomobject]@{Time=(Get-Date).ToString('o');Version=$Version;Kind=$Kind;Message=$Message} | ConvertTo-Json -Compress | Add-Content -LiteralPath $DnsLog -Encoding UTF8
+    } catch { Write-Warning "DNS diagnostic log could not be written: $($_.Exception.Message)" }
+}
+Write-DnsDiagnostic 'DEBUG' "Startup: action=$Action; interfaces=$($InterfaceIndex -join ','); snapshot=$SnapshotPath"
 
 $Providers=[ordered]@{
-    Quad9=[pscustomobject]@{Name='Quad9 Secure'; V4=@('9.9.9.9','149.112.112.112'); V6=@('2620:fe::fe','2620:fe::fe:9'); Template='https://dns.quad9.net/dns-query'; LiveTest='Quad9'}
+    Quad9=[pscustomobject]@{Name='Quad9 Secure'; V4=@('9.9.9.9','149.112.112.112'); V6=@('2620:fe::fe','2620:fe::9'); Template='https://dns.quad9.net/dns-query'; LiveTest='Quad9'}
     AdGuard=[pscustomobject]@{Name='AdGuard DNS'; V4=@('94.140.14.14','94.140.15.15'); V6=@('2a10:50c0::ad1:ff','2a10:50c0::ad2:ff'); Template='https://dns.adguard-dns.com/dns-query'; LiveTest='Config'}
 }
 
@@ -30,6 +43,7 @@ function Write-Status {
     $color=switch($Kind){'OK'{'Green'}'INFO'{'Cyan'}'WARN'{'Yellow'}default{'Red'}}
     $tag=switch($Kind){'OK'{'[OK]'}'INFO'{'[i]'}'WARN'{'[!!]'}default{'[X]'}}
     Write-Host ("  {0} {1}" -f $tag,$Message) -ForegroundColor $color
+    Write-DnsDiagnostic $Kind $Message
 }
 function Test-Admin {
     $p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -63,26 +77,8 @@ function Get-StaticDnsServers {
 }
 function Get-DohStateForServer {
     param([string]$Server)
-    if(Get-Command Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue){
-        $x=Get-DnsClientDohServerAddress -ErrorAction Stop | Where-Object ServerAddress -eq $Server | Select-Object -First 1
-        if($x){return [pscustomobject]@{ServerAddress=$x.ServerAddress;DohTemplate=$x.DohTemplate;AllowFallbackToUdp=[bool]$x.AllowFallbackToUdp;AutoUpgrade=[bool]$x.AutoUpgrade}}
-        return $null
-    }
-    try {
-        $raw=@(& "$env:SystemRoot\System32\netsh.exe" dnsclient show encryption server=$Server 2>$null)
-        if($LASTEXITCODE -ne 0 -or -not $raw){return $null}
-        $text=$raw -join "`n"
-        $template=[regex]::Match($text,'https://\S+').Value.TrimEnd('.',',',';')
-        if(-not $template){return $null}
-        $fallback=$null
-        $upgrade=$null
-        if($text -match '(?im)UDP\s+fallback[^\r\n]*:\s*(Yes|True|Enabled)'){ $fallback=$true }
-        elseif($text -match '(?im)UDP\s+fallback[^\r\n]*:\s*(No|False|Disabled)'){ $fallback=$false }
-        if($text -match '(?im)Auto\s*upgrade[^\r\n]*:\s*(Yes|True|Enabled)'){ $upgrade=$true }
-        elseif($text -match '(?im)Auto\s*upgrade[^\r\n]*:\s*(No|False|Disabled)'){ $upgrade=$false }
-        if($null -eq $fallback -or $null -eq $upgrade){return $null}
-        return [pscustomobject]@{ServerAddress=$Server;DohTemplate=$template;AllowFallbackToUdp=[bool]$fallback;AutoUpgrade=[bool]$upgrade}
-    }catch{}
+    $x=Get-DnsClientDohServerAddress -ErrorAction Stop | Where-Object ServerAddress -eq $Server | Select-Object -First 1
+    if($x){return [pscustomobject]@{ServerAddress=$x.ServerAddress;DohTemplate=$x.DohTemplate;AllowFallbackToUdp=[bool]$x.AllowFallbackToUdp;AutoUpgrade=[bool]$x.AutoUpgrade}}
     return $null
 }
 function New-DnsSnapshot {
@@ -107,13 +103,13 @@ function New-DnsSnapshot {
     $enc=foreach($s in $TouchedServers){$state=Get-DohStateForServer $s;if($state){$state}}
     $currentProvider=$null
     $currentPath=Join-Path $StateRoot 'current_provider.json'
-    if(Test-Path -LiteralPath $currentPath){try{$currentProvider=Get-Content -LiteralPath $currentPath -Raw|ConvertFrom-Json}catch{}}
+    if(Test-Path -LiteralPath $currentPath){$currentProvider=Get-Content -LiteralPath $currentPath -Raw -Encoding UTF8|ConvertFrom-Json}
     $obj=[pscustomobject]@{Schema=4;Created=(Get-Date).ToString('o');Computer=$env:COMPUTERNAME;Adapters=@($adapters);Encryption=@($enc);TouchedServers=@($TouchedServers);CurrentProvider=$currentProvider}
-    $path=Join-Path $SnapshotRoot ("dns_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
+    $path=Join-Path $SnapshotRoot ("dns_{0}_{1}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'),[guid]::NewGuid().ToString('N'))
     $obj|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $path -Encoding UTF8
     $verified=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if (@($verified.Adapters).Count -ne @($adapters).Count) { throw 'DNS backup verification failed; no DNS settings were changed.' }
-    Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding ASCII
+    if ((ConvertTo-Json -InputObject $verified -Depth 8 -Compress) -ne (ConvertTo-Json -InputObject $obj -Depth 8 -Compress)) { throw 'DNS backup verification failed; no DNS settings were changed.' }
+    Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8
     Write-Status OK ("DNS snapshot saved: {0}" -f $path)
     return $path
 }
@@ -125,28 +121,22 @@ function Get-LatestSnapshot {
 }
 function Remove-DohEntry {
     param([string]$Server)
-    if(Get-Command Remove-DnsClientDohServerAddress -ErrorAction SilentlyContinue){
-        if (Get-DohStateForServer $Server) { Remove-DnsClientDohServerAddress -ServerAddress $Server -ErrorAction Stop }
-        return
-    }
-    & "$env:SystemRoot\System32\netsh.exe" dnsclient delete encryption server=$Server 2>$null|Out-Null
+    if (Get-DohStateForServer $Server) { Remove-DnsClientDohServerAddress -ServerAddress $Server -ErrorAction Stop }
+    if (Get-DohStateForServer $Server) { throw "DoH removal read-back failed for $Server." }
 }
 function Add-DohEntry {
     param([string]$Server,[string]$Template,[bool]$Fallback=$false,[bool]$Upgrade=$true)
-    if(Get-Command Add-DnsClientDohServerAddress -ErrorAction SilentlyContinue){
-        if (Get-DohStateForServer $Server) { Set-DnsClientDohServerAddress -ServerAddress $Server -DohTemplate $Template -AllowFallbackToUdp $Fallback -AutoUpgrade $Upgrade -ErrorAction Stop }
-        else { Add-DnsClientDohServerAddress -ServerAddress $Server -DohTemplate $Template -AllowFallbackToUdp $Fallback -AutoUpgrade $Upgrade -ErrorAction Stop }
-    }else{
-        $fallbackText=if($Fallback){'yes'}else{'no'};$upgradeText=if($Upgrade){'yes'}else{'no'}
-        $verb=if(Get-DohStateForServer $Server){'set'}else{'add'}
-        $result=& "$env:SystemRoot\System32\netsh.exe" dnsclient $verb encryption server=$Server dohtemplate=$Template autoupgrade=$upgradeText udpfallback=$fallbackText 2>&1
-        if($LASTEXITCODE -ne 0){throw "Could not register DoH for $Server. $($result -join ' ')"}
-    }
+    if (Get-DohStateForServer $Server) { Set-DnsClientDohServerAddress -ServerAddress $Server -DohTemplate $Template -AllowFallbackToUdp $Fallback -AutoUpgrade $Upgrade -ErrorAction Stop }
+    else { Add-DnsClientDohServerAddress -ServerAddress $Server -DohTemplate $Template -AllowFallbackToUdp $Fallback -AutoUpgrade $Upgrade -ErrorAction Stop }
+    $actual=Get-DohStateForServer $Server
+    if (-not $actual -or $actual.DohTemplate -ne $Template -or $actual.AllowFallbackToUdp -ne $Fallback -or $actual.AutoUpgrade -ne $Upgrade) { throw "DoH write read-back failed for $Server." }
 }
 function Test-WindowsDohSupport {
     $build=[int](Get-CimInstance Win32_OperatingSystem).BuildNumber
     if($build -lt 22000){throw 'This encrypted DNS profile requires Windows 11. Windows 10 does not provide the same supported per-server DoH client configuration.'}
-    if(-not(Get-Command Add-DnsClientDohServerAddress -ErrorAction SilentlyContinue) -and -not(Test-Path "$env:SystemRoot\System32\netsh.exe")){throw 'No supported Windows DoH configuration interface was found.'}
+    foreach ($command in @('Get-DnsClientDohServerAddress','Add-DnsClientDohServerAddress','Set-DnsClientDohServerAddress','Remove-DnsClientDohServerAddress')) {
+        if (-not (Get-Command $command -ErrorAction SilentlyContinue)) { throw "The supported Windows DoH interface is unavailable: $command. No DNS settings were changed." }
+    }
 }
 function Set-Provider {
     param([string]$Key)
@@ -216,8 +206,7 @@ function Test-Configuration {
     return [bool]$allGood
 }
 function Show-EncryptionTable {
-    if(Get-Command Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue){Get-DnsClientDohServerAddress|Format-Table ServerAddress,DohTemplate,AllowFallbackToUdp,AutoUpgrade -AutoSize}
-    else{& "$env:SystemRoot\System32\netsh.exe" dnsclient show encryption}
+    Get-DnsClientDohServerAddress -ErrorAction Stop|Format-Table ServerAddress,DohTemplate,AllowFallbackToUdp,AutoUpgrade -AutoSize
 }
 function Restore-Snapshot {
     param([string]$Path)
@@ -226,10 +215,16 @@ function Restore-Snapshot {
     $snap=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
     if ($snap.Schema -notin @(2,3,4)) { throw 'Unsupported DNS backup schema.' }
     if ($snap.PSObject.Properties.Name -contains 'Computer' -and $snap.Computer -ne $env:COMPUTERNAME) { throw 'This DNS backup belongs to another computer.' }
+    if (-not @($snap.Adapters).Count) { throw 'DNS backup contains no adapters; no DNS settings were changed.' }
     $availableAdapters=@(Get-NetAdapter -ErrorAction Stop)
     foreach ($a in @($snap.Adapters)) {
         if ($a.PSObject.Properties.Name -notcontains 'InterfaceGuid') { throw 'This legacy backup has no stable adapter identity; no DNS settings were changed.' }
         if (-not @($availableAdapters | Where-Object { $_.InterfaceGuid.ToString().Trim('{}') -eq $a.InterfaceGuid.ToString().Trim('{}') }).Count) { throw "Original adapter no longer exists: $($a.Name). No DNS settings were changed." }
+        if ($a.PSObject.Properties.Name -contains 'Automatic') {
+            if ($a.Automatic -isnot [bool] -or $a.PSObject.Properties.Name -notcontains 'StaticIPv4' -or $a.PSObject.Properties.Name -notcontains 'StaticIPv6') { throw 'DNS backup has invalid automatic/static state; no DNS settings were changed.' }
+            $addresses=@(@($a.StaticIPv4)+@($a.StaticIPv6) | Where-Object {$_})
+            if (([bool]$a.Automatic -and $addresses.Count) -or (-not [bool]$a.Automatic -and -not $addresses.Count)) { throw "DNS backup has inconsistent address modes for $($a.Name); no DNS settings were changed." }
+        }
     }
     $touched=if($snap.PSObject.Properties.Name -contains 'TouchedServers'){@($snap.TouchedServers)}else{@(Get-TargetServers)}
     foreach($server in $touched | Where-Object { @($snap.Encryption | ForEach-Object ServerAddress) -notcontains $_ }){Remove-DohEntry $server}
@@ -278,7 +273,12 @@ function Reset-Dhcp {
     Assert-Admin;Initialize-State
     $snapshotPath=New-DnsSnapshot
     try{
-        foreach($a in Get-Adapters){Set-AdapterDnsFamilies -Index $a.ifIndex;Write-Status OK ("{0}: DNS returned to DHCP/automatic" -f $a.Name)}
+        foreach($a in Get-Adapters){
+            Set-AdapterDnsFamilies -Index $a.ifIndex
+            $actual=Get-StaticDnsServers -Adapter $a
+            if (@($actual.IPv4).Count -or @($actual.IPv6).Count) { throw "Automatic DNS read-back failed for $($a.Name)." }
+            Write-Status OK ("{0}: DNS returned to DHCP/automatic" -f $a.Name)
+        }
         Remove-Item -LiteralPath (Join-Path $StateRoot 'current_provider.json') -ErrorAction SilentlyContinue
         Clear-DnsClientCache -ErrorAction SilentlyContinue
         Write-Status OK 'Automatic DNS restored. Global DoH entries were preserved for other adapters.'
@@ -310,15 +310,17 @@ function Show-Menu {
 
 if ($Action -eq 'Library') { return }
 if($Action -ne 'Menu'){
+    try {
     switch($Action){
         'Quad9'{Set-Provider Quad9}'AdGuard'{Set-Provider AdGuard}'Mullvad'{Set-Provider Mullvad}'MullvadAdBlock'{Set-Provider MullvadAdBlock}
         'MullvadBase'{Set-Provider MullvadBase}'MullvadExtended'{Set-Provider MullvadExtended}'MullvadFamily'{Set-Provider MullvadFamily}'MullvadAll'{Set-Provider MullvadAll}
         'Verify'{if (-not (Test-Configuration)) { exit 1 }}'Restore'{Restore-Snapshot -Path $SnapshotPath}'DHCP'{Reset-Dhcp}
     }
+    } catch { Write-DnsDiagnostic 'FAIL' $_.Exception.Message; throw }
     exit
 }
 while($true){
-    Show-Menu;$c=(Read-Host '  Select').Trim().ToUpperInvariant()
+    Show-Menu;$c=(Read-Host '  Select').Trim().ToUpperInvariant();Write-DnsDiagnostic 'DEBUG' "Selected action: $c"
     try{switch($c){'1'{Set-Provider Quad9}'2'{Set-Provider AdGuard}'V'{Test-Configuration|Out-Null}'R'{Restore-Snapshot}'D'{Reset-Dhcp}'0'{break}default{Write-Status WARN 'Invalid selection.'}}}catch{Write-Status FAIL $_.Exception.Message}
     if($c -eq '0'){break};Write-Host '';Read-Host '  Press Enter to continue'|Out-Null
 }

@@ -166,6 +166,11 @@ try {
             $run=Invoke-SuiteRun -ActionIds @('Debloat')
             $copied=[IO.File]::ReadAllText((Join-Path $run.Apps[0].Backup 'payload.bin')) -eq 'package bytes'
             $removed=($run.Status -eq 'Completed' -and $run.Apps.Count -eq 1 -and -not $script:FixtureInstalled)
+            $backupPayload=Join-Path $run.Apps[0].Backup 'payload.bin'
+            [IO.File]::WriteAllText($backupPayload,'changed backup bytes')
+            $blockedUndo=Invoke-SuiteUndo $run.Path
+            $tamperBlocked=($blockedUndo.Status -eq 'UndoNeedsAttention' -and -not $script:FixtureInstalled)
+            [IO.File]::WriteAllText($backupPayload,'package bytes')
             $undo=Invoke-SuiteUndo $run.Path
             $reinstalled=($undo.Status -eq 'Restored' -and $script:FixtureInstalled)
             Remove-Item -LiteralPath (Join-Path $packageRoot 'AppxManifest.xml') -Force
@@ -175,17 +180,23 @@ try {
             try { $null=Invoke-SuiteRun -ActionIds @('Debloat') -AppIds @('Microsoft.WindowsStore_fixture') } catch { $protectedBlocked=$true }
             function script:Get-CimInstance { [pscustomobject]@{BuildNumber='26100'} }
             function script:Get-WindowsOptionalFeature { param([switch]$Online,$FeatureName) [pscustomobject]@{FeatureName='Recall';State=$script:FixtureFeature} }
-            function script:Disable-WindowsOptionalFeature { param([switch]$Online,$FeatureName,[switch]$NoRestart) if (-not $NoRestart) { throw 'Restart must stay explicit' }; $script:FixtureFeatureCalls++; $script:FixtureFeature='Disabled'; [pscustomobject]@{RestartNeeded=$false} }
+            function script:Disable-WindowsOptionalFeature { param([switch]$Online,$FeatureName,[switch]$NoRestart) if (-not $NoRestart) { throw 'Restart must stay explicit' }; $script:FixtureFeatureCalls++; $script:FixtureFeature=if ($script:FixtureDisablePending) { 'DisablePending' } else { 'Disabled' }; [pscustomobject]@{RestartNeeded=$false} }
             function script:Enable-WindowsOptionalFeature { param([switch]$Online,$FeatureName,[switch]$NoRestart) if (-not $NoRestart) { throw 'Restart must stay explicit' }; $script:FixtureFeature='Enabled'; [pscustomobject]@{RestartNeeded=$false} }
             # Fake only reboot-key probes; use native filesystem access elsewhere.
             function script:Test-Path { param($LiteralPath) if ($LiteralPath -like 'HKLM:*') { return $false }; Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath }
+            $script:FixtureDisablePending=$false
             $featureRun=Invoke-SuiteRun -ActionIds @('Recall')
             $featureDisabled=($featureRun.Status -eq 'Completed' -and $featureRun.Features.Count -eq 1 -and $script:FixtureFeature -eq 'Disabled')
             $featureUndo=Invoke-SuiteUndo $featureRun.Path
             $featureRestored=($featureUndo.Status -eq 'Restored' -and $script:FixtureFeature -eq 'Enabled')
             $script:FixtureFeature='Disabled'
             $alreadyDisabled=Invoke-SuiteRun -ActionIds @('Recall')
-            [pscustomobject]@{Allowlist=($available.Count -eq 1 -and $available[0].Name -eq 'Microsoft.Copilot');Preview=($preview[0].Details -match 'Installed: Microsoft.Copilot');Copied=$copied;Removed=$removed;Reinstalled=$reinstalled;BackupBlocked=$blocked;ProtectedBlocked=$protectedBlocked;FeatureDisabled=$featureDisabled;FeatureRestored=$featureRestored;FeatureSkipped=($alreadyDisabled.Features.Count -eq 0 -and $script:FixtureFeatureCalls -eq 1 -and $alreadyDisabled.Steps[0].Status -eq 'Skipped')}
+            $skipped=($alreadyDisabled.Features.Count -eq 0 -and $script:FixtureFeatureCalls -eq 1 -and $alreadyDisabled.Steps[0].Status -eq 'Skipped')
+            $script:FixtureFeature='Enabled'; $script:FixtureDisablePending=$true
+            $pending=Invoke-SuiteRun -ActionIds @('Recall')
+            $script:FixtureFeature='Disabled' # Simulate the requested restart completing.
+            $pendingUndo=Invoke-SuiteUndo $pending.Path
+            [pscustomobject]@{Allowlist=($available.Count -eq 1 -and $available[0].Name -eq 'Microsoft.Copilot');Preview=($preview[0].Details -match 'Installed: Microsoft.Copilot');Copied=$copied;Removed=$removed;TamperBlocked=$tamperBlocked;Reinstalled=$reinstalled;BackupBlocked=$blocked;ProtectedBlocked=$protectedBlocked;FeatureDisabled=$featureDisabled;FeatureRestored=$featureRestored;FeatureSkipped=$skipped;PendingRestored=($pendingUndo.Status -eq 'Restored' -and $script:FixtureFeature -eq 'Enabled')}
         } finally {
             Set-Item Function:script:Assert-Administrator $savedAdmin
             foreach ($name in @('Get-AppxPackage','Remove-AppxPackage','Add-AppxPackage','Get-CimInstance','Get-WindowsOptionalFeature','Disable-WindowsOptionalFeature','Enable-WindowsOptionalFeature','Test-Path')) { Remove-Item ('Function:script:'+$name) -ErrorAction SilentlyContinue }
@@ -195,6 +206,8 @@ try {
     Check $debloat.Preview 'Debloat preview names the installed consumer packages'
     Check $debloat.Copied 'Real robocopy package backup preserves exact file bytes'
     Check $debloat.Removed 'One-click debloat backs up then invokes selected package removal'
+    Check $debloat.TamperBlocked 'Changed backup bytes block AppX registration and remain recoverable after correction'
+    Check $debloat.PendingRestored 'Recall undo accepts the expected disabled state after a pending restart finishes'
     Check $debloat.Reinstalled 'Package journal undo uses the saved manifest for re-registration'
     Check $debloat.BackupBlocked 'Incomplete package backup prevents removal and reports failure'
     Check $debloat.ProtectedBlocked 'Protected app IDs fail preflight before optimization'
@@ -342,7 +355,7 @@ function Invoke-SuiteNative {
         $expected=if ($scenario -eq 'Fail') { 'CompletedWithErrors' } else { 'Completed' }
         Check ($result.Status -eq $expected -and $script:controls.RepairButton.IsEnabled) "Real repair button/worker/timer completes $scenario and re-enables controls"
         $calls=@([IO.File]::ReadAllLines($scenarioPath+'.calls'))
-        Check ($calls[0] -eq 'dism.exe' -and ($calls.Count -eq 1) -eq ($scenario -eq 'Fail') -and ($scenario -eq 'Fail' -or $calls[1] -eq 'sfc.exe')) "Repair runs DISM before SFC and stops on failure: $scenario"
+        Check ($calls[0] -eq 'dism.exe' -and ($calls.Count -eq 1) -eq ($scenario -ne 'Success') -and ($scenario -ne 'Success' -or $calls[1] -eq 'sfc.exe')) "Repair runs DISM before SFC and stops on failure or required restart: $scenario"
         Check ($script:controls.ResultText.Text -match $(if ($scenario -eq 'Fail') { 'repair-failure-marker' } else { 'repair-output-marker' }) -and $script:controls.ResultText.Text -match 'Report:') "Repair preserves actual native output and recovery report: $scenario"
         if ($scenario -eq 'Restart') { Check ($script:controls.ResultText.Text -match 'Restart required') 'Repair reports native restart-required exit code without restarting Windows' }
     }
@@ -515,6 +528,7 @@ function Invoke-SuiteNative {
     $aiChecks=& {
         param($definitions,$key,$fixture)
         Invoke-Expression $definitions
+        function Get-AiFeaturePolicyDefinitions { [pscustomobject]@{Path=$key;Name='Expanded'} }
         $state=Get-AiRegistryEntryState $key 'Expanded'
         $snapshot=[pscustomobject]@{Schema=1;Computer=$env:COMPUTERNAME;User=[Security.Principal.WindowsIdentity]::GetCurrent().Name;Entries=@($state)}
         $path=Join-Path $fixture 'ai-policy.json'; Save-SuiteJson $path $snapshot

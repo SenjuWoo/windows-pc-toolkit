@@ -1,19 +1,21 @@
 @echo off
-title PC Corruption Fixer v7.2
-color 0B
-
-:: SECURITY: use the absolute path to powershell.exe so a rogue
-:: powershell.exe next to this script (or earlier in PATH) is never used.
-set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-
-:: Self-elevate to Administrator, then launch the PowerShell script
-net session >nul 2>&1
-if errorlevel 1 (
-    echo Requesting Administrator privileges...
-    "%PS_EXE%" -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-    exit /b
-)
-
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0PC_Fixer.ps1"
+title PC Corruption Fixer v7.2.1
+setlocal EnableExtensions DisableDelayedExpansion
+set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "LOG=%LOCALAPPDATA%\Temp\PCFixer_launch.log"
+set "TOOLKIT_LAUNCHER=%~f0"
+"%PS%" -NoProfile -Command "$p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 }; exit 1"
+if errorlevel 1 goto :elevate
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0PC_Fixer.ps1" -ExpectedUserSid "%~1"
 set "RC=%ERRORLEVEL%"
+goto :finish
+:elevate
+"%PS%" -NoProfile -Command "try { $p=Start-Process -FilePath $env:TOOLKIT_LAUNCHER -ArgumentList ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -Verb RunAs -Wait -PassThru -ErrorAction Stop; exit $p.ExitCode } catch { Write-Error $_; exit 1 }" >> "%LOG%" 2>&1
+set "RC=%ERRORLEVEL%"
+:finish
+echo [%date% %time%] PC_Fixer.ps1 exited with %RC% >> "%LOG%"
+if not "%RC%"=="0" (
+    echo Toolkit exited with code %RC%. Log: %LOG%
+    pause
+)
 exit /b %RC%

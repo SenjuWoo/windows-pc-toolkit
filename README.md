@@ -6,6 +6,8 @@
 
 **[Download v3.0.0](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.0/Windows-PC-Toolkit-3.0.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.0)
 
+**Current source: 3.0.1 correctness audit.** This fixes cleanup, DNS, privacy recovery, repair reporting and launcher defects found in 3.0.0. See the [whole-project audit](docs/AUDIT_2026-10-10.md). The public download above is the older release; source fixes are not present in that ZIP.
+
 ![Toolkit dashboard](docs/images/dashboard.png)
 
 Rendered from the actual WPF dashboard with initial selections. Hardware and results load on the target PC.
@@ -30,6 +32,8 @@ For an upgrade, close the old dashboard and launch the newly extracted copy. Exi
 - Disable Edge built-in AI model downloads and website AI APIs where supported.
 
 **Preview changes** explains the plan without applying it. Nine additional choices cover captures, mouse acceleration, animations, Explorer/taskbar preferences, Delivery Optimization cleanup and SSD ReTrim. Some settings need sign-out to refresh; no restart is forced.
+
+Preview includes reviewed startup/app selections. Reviewed selections also work when every profile checkbox is off; controls stay locked while a saved operation runs.
 
 The one-click profile names installed apps in its removal confirmation; package backups are verified before each uninstall. To keep consumer apps, untick **Remove Copilot and optional consumer apps**. For individual app removals and startup control, select rows on their pages and tick **Also apply my selected startup entries and app removals**. These changes share one recovery journal.
 
@@ -58,6 +62,8 @@ Strict privacy, network reset and shader troubleshooting remain explicit advance
 
 Existing DoH entries are updated in place. Restore matches adapter GUIDs and separately preserves IPv4/IPv6 automatic versus static modes. Unrelated adapters, VPNs and other providers' DoH entries are preserved. Failed apply attempts restore the previous state and report any rollback failure.
 
+DNS writes require Windows 11's typed DnsClient DoH cmdlets; unavailable APIs fail before changes. The Quad9 Secure IPv6 pair is `2620:fe::fe`, `2620:fe::9`, corrected against [Quad9's service table](https://docs.quad9.net/services/).
+
 Quad9 requires its live TXT transport test to report `doh`; an unavailable test fails verification. AdGuard checks configuration/resolution without claiming the same live attestation.
 
 **Mullvad public encrypted DNS ends November 2, 2026.** Its new-apply choices are removed now; old backups remain restorable. Historical Mullvad launchers open the supported-provider menu. Use Quad9 or AdGuard for ongoing service. [Mullvad announcement](https://mullvad.net/en/blog/2026/9/3/shutting-down-our-public-encrypted-dns-servers-and-sponsoring-quad9-instead), [Quad9 services](https://docs.quad9.net/services/), [AdGuard DNS](https://adguard-dns.io/en/public-dns.html).
@@ -74,6 +80,8 @@ Dashboard reports, typed registry journals, task states and verified package cop
 
 Registry state is saved **before** mutation, preserves types/literal environment strings, and is checked after restore. Undo keeps intervening registry changes and lists conflicts. Repeating completed undo preserves current state. Failed registry actions attempt to restore partial changes.
 
+App package copies now retain per-file hashes and are rechecked before registration. Changed copies are refused. Older app backups without saved hashes require reinstall through Microsoft Store. Repair/cache-only reports explicitly say that they contain no reversible changes.
+
 Recall is disabled using the supported Windows optional-feature API with no forced restart. Undo re-enables the recorded feature; pending servicing changes require a restart before verification. The dashboard removes the modern Copilot app rather than relying on the retiring legacy Copilot policy. AI controls preserve Windows AI frameworks and separate local-AI applications/model stores. Browser-policy support varies by version/profile. [Copilot removal](https://learn.microsoft.com/en-us/windows/client-management/manage-windows-copilot), [Recall management](https://learn.microsoft.com/en-us/windows/client-management/manage-recall), [Edge model policy](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-browser-policies/genailocalfoundationalmodelsettings).
 
 Deleted temporary/cache files, Recall snapshots and browser-built-in AI models are not recoverable through the journal. Windows/Store updates may offer apps again; removal affects the current account, not provisioning for future accounts. App removal can delete app data; backups support package re-registration, not app-data recovery. Dependencies/servicing may prevent re-registration; the report identifies failures and Microsoft Store remains the reinstall route. System repair is logged maintenance, not a reversible registry tweak.
@@ -84,12 +92,12 @@ Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `Ga
 
 | Component | Version | Documentation |
 | --- | ---: | --- |
-| Dashboard / core | 3.0.0 | This page |
-| Gaming Optimizer | 5.0 | [Gaming](pc-gaming-optimizer/README.md) |
-| PC Cleaner | 1.1 | [Cleanup/registry](pc-cleaner/README.md) |
-| Corruption Fixer | 7.2 | [Repair](pc-corruption-fixer/README.md) |
-| Privacy Guard | 2.1 | [Privacy](pc-privacy-guard/README.md) |
-| Encrypted DNS | 2.2 | [DNS](dns-encrypted-doh/README.md) |
+| Dashboard / core | 3.0.1 | This page |
+| Gaming Optimizer | 5.0.1 | [Gaming](pc-gaming-optimizer/README.md) |
+| PC Cleaner | 1.1.1 | [Cleanup/registry](pc-cleaner/README.md) |
+| Corruption Fixer | 7.2.1 | [Repair](pc-corruption-fixer/README.md) |
+| Privacy Guard | 2.1.1 | [Privacy](pc-privacy-guard/README.md) |
+| Encrypted DNS | 2.2.1 | [DNS](dns-encrypted-doh/README.md) |
 
 ## Requirements and validation
 
@@ -101,7 +109,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Toolkit.Run.ps1 -Previ
 # Static checks
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
 # Disposable registry/filesystem, actual WPF, simulated failures
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_All.ps1
 ```
 
 Tests do not apply live optimization or change live DNS/update services. [Validation evidence and limits](VALIDATION_REPORT.md).
+
+Detailed diagnostics are quiet by default. Launch `Toolkit.ps1 -DebugLog`, or set `WINDOWS_PC_TOOLKIT_DEBUG=1` for the dashboard and consoles. Bounded diagnostic logs are in `%LOCALAPPDATA%\WindowsPCToolkit\Logs` (`Suite.log` for the dashboard/worker); saved operation reports remain in ProgramData. Failures retain their causes even with debug off.

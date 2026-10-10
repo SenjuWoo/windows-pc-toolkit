@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    PC Corruption Fixer v7.2 - Advanced system repair and diagnostics toolkit.
+    PC Corruption Fixer v7.2.1 - Advanced system repair and diagnostics toolkit.
 .DESCRIPTION
     Repairs corrupted system files, fixes Windows Update safely, clears caches,
     resets networking, deep-cleans components, checks disk health, manages
@@ -8,7 +8,7 @@
     exports a full HTML health report. All operations are logged.
 .NOTES
     Requires Administrator. Run via Fix_Corruption.bat or right-click -> Run with PowerShell.
-    Log file saved to: $env:USERPROFILE\Desktop\PC_Fixer_Log_*.txt
+    Logs: $env:LOCALAPPDATA\WindowsPCToolkit\Logs. Use -DebugLog for transcripts.
 
     v7.1 CHANGES:
     - REBUILT: AI Feature Privacy [23] is now policy-only and fully reversible.
@@ -81,6 +81,11 @@
 #>
 
 #Requires -RunAsAdministrator
+param([switch]$DebugLog,[string]$ExpectedUserSid)
+if ($ExpectedUserSid -and $ExpectedUserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) {
+    Write-Error 'Elevation switched Windows accounts. Launch from an administrator account belonging to the intended user.'
+    exit 1
+}
 
 $ProgressPreference = 'SilentlyContinue'
 
@@ -88,10 +93,12 @@ $ProgressPreference = 'SilentlyContinue'
 #  CONFIGURATION
 # ============================================================================
 
-$Script:Version    = '7.2'
-$Script:LogDir     = "$env:USERPROFILE\Desktop"
+$Script:Version    = '7.2.1'
+$Script:DebugLog   = $DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'
+$Script:LogDir     = Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\PCFixer'
 $Script:LogName    = "PC_Fixer_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
 $Script:LogPath    = Join-Path $Script:LogDir $Script:LogName
+if (-not $Script:DebugLog) { $Script:LogPath=Join-Path $Script:LogDir 'PCFixer.log' }
 $Script:LogKeep    = 15          # number of past log files to retain
 $Script:StartTime  = Get-Date
 $Script:Results    = [ordered]@{}
@@ -99,6 +106,19 @@ $Script:HasFailure = $false
 $Script:StepNum    = 0
 $Script:TotalSteps = 0
 $Script:StayAwakeArmed = $false
+$Script:RestartRequired = $false
+[void][IO.Directory]::CreateDirectory($Script:LogDir)
+
+function Write-FixerDiagnostic {
+    param([string]$Kind,[string]$Message)
+    if (-not $Script:DebugLog -and $Kind -notin @('Fail','Warn')) { return }
+    try {
+        $path=Join-Path $Script:LogDir 'PCFixer.log'
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 2MB) { Move-Item -LiteralPath $path -Destination ($path+'.1') -Force }
+        [pscustomobject]@{Time=(Get-Date).ToString('o');Version=$Script:Version;Kind=$Kind;Message=$Message} | ConvertTo-Json -Compress | Add-Content -LiteralPath $path -Encoding UTF8
+    } catch { Write-Warning ('Could not write fixer diagnostic log: '+$_.Exception.Message) }
+}
+Write-FixerDiagnostic Info ("Start; LogDir=$Script:LogDir; Debug=$Script:DebugLog; Windows=$env:SystemRoot")
 
 # Absolute path to the trusted System32 directory. Every native Windows tool
 # and every DLL this script touches is resolved under here so that a binary
@@ -164,7 +184,7 @@ function Get-UsageBar {
 # ============================================================================
 
 try {
-    Start-Transcript -Path $Script:LogPath -Append -ErrorAction SilentlyContinue | Out-Null
+    if ($Script:DebugLog) { Start-Transcript -Path $Script:LogPath -Append -ErrorAction Stop | Out-Null }
 } catch { }
 
 # Prune old logs so the Desktop doesn't fill up (keeps the newest $Script:LogKeep).
@@ -194,11 +214,11 @@ public static class FixerStayAwake {
     public const uint ES_CONTINUOUS = 0x80000000;
     public const uint ES_SYSTEM_REQUIRED = 0x00000001;
     public const uint ES_AWAYMODE_REQUIRED = 0x00000040;
-    public static void PreventSleep() {
-        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
+    public static bool PreventSleep() {
+        return SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) != 0;
     }
-    public static void AllowSleep() {
-        SetThreadExecutionState(ES_CONTINUOUS);
+    public static bool AllowSleep() {
+        return SetThreadExecutionState(ES_CONTINUOUS) != 0;
     }
 }
 '@
@@ -210,19 +230,19 @@ public static class FixerStayAwake {
 function Enable-StayAwake {
     try {
         if ('FixerStayAwake' -as [type]) {
-            [FixerStayAwake]::PreventSleep()
+            if (-not [FixerStayAwake]::PreventSleep()) { throw 'Windows rejected the temporary stay-awake request.' }
             $Script:StayAwakeArmed = $true
         }
-    } catch { }
+    } catch { Write-Status Warn $_.Exception.Message }
 }
 
 function Disable-StayAwake {
     try {
         if (('FixerStayAwake' -as [type]) -and $Script:StayAwakeArmed) {
-            [FixerStayAwake]::AllowSleep()
+            if (-not [FixerStayAwake]::AllowSleep()) { throw 'Windows rejected stay-awake release.' }
             $Script:StayAwakeArmed = $false
         }
-    } catch { }
+    } catch { Write-Status Warn $_.Exception.Message }
 }
 
 function Resolve-SystemTool {
@@ -236,8 +256,8 @@ function Resolve-SystemTool {
         [string]$BaseDir
     )
     $leaf = Split-Path -Leaf $Name
-    $root = if ([string]::IsNullOrWhiteSpace($BaseDir)) { $Script:Sys32 } else { $BaseDir }
-    $winRoot = $env:SystemRoot.TrimEnd('\') + '\'
+    $root = [IO.Path]::GetFullPath($(if ([string]::IsNullOrWhiteSpace($BaseDir)) { $Script:Sys32 } else { $BaseDir }))
+    $winRoot = [IO.Path]::GetFullPath($env:SystemRoot).TrimEnd('\') + '\'
     if (-not ($root.TrimEnd('\') + '\').StartsWith($winRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         return $null
     }
@@ -325,7 +345,9 @@ function Invoke-NativeProcessSafe {
     $exe = Resolve-SystemTool $FilePath -BaseDir $BaseDir
     if (-not $exe) { return [PSCustomObject]@{ ExitCode = 9009; Output = "Tool not found: $FilePath" } }
     $quoted = foreach ($arg in $ArgumentList) {
-        if ($arg -match '[\s"]') { '"' + ($arg -replace '"','\"') + '"' } else { $arg }
+        if ($arg.Length -eq 0 -or $arg -match '[\s"]') {
+            '"'+[regex]::Replace($arg,'(\\*)("|$)',{param($m) $slashes=$m.Groups[1].Value; if($m.Groups[2].Value -eq '"'){$slashes+$slashes+'\"'}else{$slashes+$slashes}})+'"'
+        } else { $arg }
     }
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $exe
@@ -424,6 +446,8 @@ function Write-Status {
     $m = $map[$Type]
     Write-Host "$($m.Tag)" -ForegroundColor $m.Color -NoNewline
     Write-Host $Text -ForegroundColor $(if ($Type -eq 'Info') { 'Gray' } else { 'White' })
+    Write-FixerDiagnostic $Type $Text
+    if ($Type -eq 'Fail') { $Script:HasFailure=$true }
 }
 
 function Write-StepHeader {
@@ -511,16 +535,16 @@ function Show-Dashboard {
 
     # Disk
     try {
-        $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -EA Stop
+        $disk = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $env:SystemDrive) -EA Stop
         $freeGB  = [math]::Round($disk.FreeSpace / 1GB, 1)
         $totalGB = [math]::Round($disk.Size / 1GB, 1)
         $pctFree = [math]::Round(($disk.FreeSpace / $disk.Size) * 100, 1)
         $diskColor = if ($pctFree -lt 10) { 'Red' } elseif ($pctFree -lt 20) { 'Yellow' } else { 'White' }
-        Write-Host '  C: Drive : ' -ForegroundColor Gray -NoNewline
+        Write-Host ('  {0} Drive : ' -f $env:SystemDrive) -ForegroundColor Gray -NoNewline
         Write-Host "$freeGB GB free / $totalGB GB  " -ForegroundColor $diskColor -NoNewline
         Write-Host (Get-UsageBar (100 - $pctFree) 14) -ForegroundColor DarkCyan -NoNewline
         Write-Host " $pctFree% free" -ForegroundColor $diskColor
-    } catch { Write-Host '  C: Drive : (unavailable)' -ForegroundColor DarkGray }
+    } catch { Write-Host ('  {0} Drive : (unavailable)' -f $env:SystemDrive) -ForegroundColor DarkGray }
 
     # RAM
     try {
@@ -619,7 +643,7 @@ function Show-Menu {
     Write-Host "  $($B.H * 62)" -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  [1]  * FULL REPAIR (Recommended)' -ForegroundColor Green
-    Write-Host '       SFC + conditional DISM + safe caches + network health + disk scan'
+    Write-Host '       DISM then SFC + safe caches + network health + disk scan'
     Write-Host ''
     Write-Host '  SYSTEM REPAIR' -ForegroundColor DarkCyan
     Write-Host "  $($B.MH * 40)" -ForegroundColor DarkGray
@@ -694,6 +718,12 @@ function Invoke-SfcScan {
 
     if ($Total -gt 0) { Write-StepHeader 'SFC - System File Check' $Step $Total }
     else { Write-StepHeader 'SFC - System File Check' }
+    $pending=Test-PendingReboot
+    if ($Script:RestartRequired -or ($pending.Pending -and @($pending.Reasons | Where-Object { $_ -in @('Windows Update','Component Based Servicing') }).Count)) {
+        Write-Status Warn 'Finish the pending Windows restart before SFC repair.'
+        $Script:Results['SFC']='SKIP - Update restart pending'
+        return
+    }
 
     Write-Status Info 'Scanning for corrupted or missing system files...'
     Write-Status Info 'This may take 5-15 minutes. Sleep is blocked for this run.'
@@ -741,12 +771,12 @@ function Invoke-DismRepair {
     Enable-StayAwake
     $sw=[Diagnostics.Stopwatch]::StartNew()
     try {
-        $result=Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online','/Cleanup-Image','/RestoreHealth'
+        $result=Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online','/Cleanup-Image','/RestoreHealth','/NoRestart'
         Write-Host $result.Output
         if ($result.ExitCode -in @(0,3010)) {
             Write-Status OK 'DISM command completed. Review its output for the repair verdict.'
             $Script:Results['DISM']='COMPLETED - Review DISM output'
-            if ($result.ExitCode -eq 3010) { Write-Status Warn 'Windows requests a restart. No automatic restart will occur.' }
+            if ($result.ExitCode -eq 3010) { $Script:RestartRequired=$true; Write-Status Warn 'Windows requests a restart. No automatic restart will occur.' }
         } else {
             Write-Status Fail "DISM exited with code $($result.ExitCode). Review its output before continuing."
             $Script:Results['DISM']="FAIL - Exit code $($result.ExitCode)"
@@ -772,25 +802,28 @@ function Invoke-CacheCleanup {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     # DNS Flush
+    $cacheAttention=$false
     try {
-        $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
+        $flush = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
+        if ($flush.ExitCode -ne 0) { throw "ipconfig /flushdns failed (exit $($flush.ExitCode)): $($flush.Output)" }
         Write-Status OK 'DNS resolver cache flushed.'
-    } catch { Write-Status Warn 'DNS flush skipped.' }
+    } catch { $cacheAttention=$true; Write-Status Warn ('DNS flush skipped: '+$_.Exception.Message) }
 
     # Reuse the suite's age, protected-data and link guards in every repair path.
     try {
         Import-Module (Join-Path $PSScriptRoot '..\Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
         Write-Status OK (Invoke-SuiteTempCleanup)
-    } catch { Write-Status Warn ('Temp cleanup skipped: '+$_.Exception.Message) }
+    } catch { $cacheAttention=$true; Write-Status Warn ('Temp cleanup skipped: '+$_.Exception.Message) }
 
     # Thumbnail cache
     try {
         $thumbPath = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
         if (Test-Path $thumbPath) {
-            $thumbs = Get-ChildItem "$thumbPath\thumbcache_*.db" -EA SilentlyContinue
+            $thumbs = @(Get-ChildItem -LiteralPath $thumbPath -Filter 'thumbcache_*.db' -File -EA Stop)
             if ($thumbs) {
-                $thumbs | Remove-Item -Force -EA SilentlyContinue
-                Write-Status OK "Thumbnail cache cleared ($($thumbs.Count) files)."
+                $removed=0
+                foreach ($thumb in $thumbs) { try { Remove-Item -LiteralPath $thumb.FullName -Force -EA Stop; $removed++ } catch { $cacheAttention=$true } }
+                Write-Status Info "Thumbnail cache: $removed of $($thumbs.Count) files removed; locked files retained."
             } else {
                 Write-Status OK 'Thumbnail cache already clean.'
             }
@@ -826,8 +859,8 @@ function Invoke-CacheCleanup {
     # Deleting SoftwareDistribution\Download breaks in-progress updates
     # and can corrupt the WU database. Use [7] Repair Windows Update instead.
 
-    if ($totalTempFiles -gt 0 -and $totalTempRemoved -eq 0) {
-        $Script:Results['Caches'] = 'WARN - Temp files were in use; nothing could be removed'
+    if ($cacheAttention) {
+        $Script:Results['Caches'] = 'WARN - Cache cleanup completed with skipped/failed requests; review output'
     } else {
         $Script:Results['Caches'] = 'PASS - Safe caches cleaned (Update data and Recycle Bin preserved unless requested)'
     }
@@ -863,7 +896,7 @@ function Backup-NetworkDnsState {
         }
         if (@($adapters).Count -eq 0) { throw 'No adapters could be backed up.' }
         $doh = @()
-        if (Get-Command Get-DnsClientDohServerAddress -EA Stop) {
+        if (Get-Command Get-DnsClientDohServerAddress -EA SilentlyContinue) {
             $doh = @(Get-DnsClientDohServerAddress -EA Stop | ForEach-Object {
                 [PSCustomObject]@{
                     ServerAddress = $_.ServerAddress
@@ -921,8 +954,9 @@ function Invoke-NetworkHealthRefresh {
     if ($Total -gt 0) { Write-StepHeader 'Network Health + DNS Refresh' $Step $Total }
     else { Write-StepHeader 'Network Health + DNS Refresh' }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $null = Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
-    Write-Status OK 'DNS resolver cache flushed. Adapter DNS and DoH settings preserved.'
+    $flush=Invoke-Native-Quiet -FilePath 'ipconfig.exe' -ArgumentList '/flushdns'
+    if ($flush.ExitCode -eq 0) { Write-Status OK 'DNS resolver cache flushed. Adapter DNS and DoH settings preserved.' }
+    else { Write-Status Warn "DNS cache flush failed (exit $($flush.ExitCode)): $($flush.Output)" }
     $dnsOK = $false; $httpsOK = $false
     try { Resolve-DnsName -Name 'www.microsoft.com' -DnsOnly -EA Stop | Out-Null; $dnsOK = $true; Write-Status OK 'DNS resolution test passed.' }
     catch { Write-Status Warn "DNS resolution test failed: $_" }
@@ -976,11 +1010,12 @@ function Invoke-NetworkReset {
     Write-Host '  VLAN, VPN, and adapter settings. This tool backs up DNS/DoH only.' -ForegroundColor Yellow
     $tcpChoice = Read-Host '  Also reset the TCP/IP stack? (y/N)'
     $tcpReset = $false
+    $resetErrors=0
     if ($tcpChoice -eq 'y' -or $tcpChoice -eq 'Y') {
         Write-Status Info 'Resetting TCP/IP stack...'
         $tcp = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'int', 'ip', 'reset'
         if ($tcp.ExitCode -eq 0) { Write-Status OK 'TCP/IP reset.'; $tcpReset = $true }
-        else { Write-Status Warn "TCP/IP reset exited with code $($tcp.ExitCode)." }
+        else { $resetErrors++; Write-Status Warn "TCP/IP reset exited with code $($tcp.ExitCode): $($tcp.Output)" }
     } else {
         Write-Status Skip 'TCP/IP reset skipped; custom adapter settings preserved.'
     }
@@ -999,7 +1034,7 @@ function Invoke-NetworkReset {
     if ($fwChoice -eq 'y' -or $fwChoice -eq 'Y') {
         $fw = Invoke-Native-Quiet -FilePath 'netsh.exe' -ArgumentList 'advfirewall', 'reset'
         if ($fw.ExitCode -eq 0) { Write-Status OK 'Firewall reset to defaults.'; $firewallReset = $true }
-        else { Write-Status Warn "Firewall reset exited with code $($fw.ExitCode)." }
+        else { $resetErrors++; Write-Status Warn "Firewall reset exited with code $($fw.ExitCode): $($fw.Output)" }
     } else {
         Write-Status Skip 'Firewall reset skipped (custom rules preserved).'
     }
@@ -1012,7 +1047,7 @@ function Invoke-NetworkReset {
         $parts = @('Winsock')
         if ($tcpReset) { $parts += 'TCP/IP' }
         if ($firewallReset) { $parts += 'firewall' }
-        $Script:Results['Network'] = "PASS - $($parts -join ' + ') reset; DNS state restored"
+        $Script:Results['Network'] = if($resetErrors){"WARN - $($parts -join ' + ') reset; $resetErrors requested reset(s) failed; DNS state restored"}else{"PASS - $($parts -join ' + ') reset; DNS state restored"}
     }
     Write-Status Info 'A reboot is required to complete Winsock or TCP/IP reset changes.'
     $sw.Stop()
@@ -1028,20 +1063,33 @@ function Invoke-DeepCleanup {
 
     if ($Total -gt 0) { Write-StepHeader 'DISM - Deep Component Cleanup' $Step $Total }
     else { Write-StepHeader 'DISM - Deep Component Cleanup' }
+    $pending=Test-PendingReboot
+    if ($Script:RestartRequired -or ($pending.Pending -and @($pending.Reasons | Where-Object { $_ -in @('Windows Update','Component Based Servicing') }).Count)) {
+        Write-Status Warn 'Finish the pending Windows restart before component cleanup.'
+        $Script:Results['DeepClean']='SKIP - Update restart pending'
+        return
+    }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
+    $clean2=$null
+    Enable-StayAwake
+    try {
     Write-Status Info 'Analyzing component store...'
     Write-Host ''
     $null = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/AnalyzeComponentStore'
     Write-Host ''
 
     Write-Status Info 'Starting component cleanup...'
-    $clean1 = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/StartComponentCleanup'
-    if ($clean1.ExitCode -eq 0) {
+    $clean1 = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/StartComponentCleanup', '/NoRestart'
+    if ($clean1.ExitCode -in @(0,3010)) {
         Write-Status OK 'Component cleanup complete.'
     } else {
         Write-Status Warn "Component cleanup exited with code $($clean1.ExitCode)."
+    }
+    if ($clean1.ExitCode -eq 3010) { $Script:RestartRequired=$true }
+    if ($clean1.ExitCode -ne 0) {
+        $Script:Results['DeepClean']='WARN - Cleanup needs attention or a restart; ResetBase not attempted'
+        return
     }
 
     # ResetBase WARNING - this prevents uninstalling recent updates
@@ -1053,9 +1101,10 @@ function Invoke-DeepCleanup {
     $rbChoice = Read-Host '  Run ResetBase? (y/N)'
     if ($rbChoice -eq 'y' -or $rbChoice -eq 'Y') {
         Write-Status Info 'Running ResetBase...'
-        $clean2 = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase'
-        if ($clean2.ExitCode -eq 0) {
+        $clean2 = Invoke-Native -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/StartComponentCleanup', '/ResetBase', '/NoRestart'
+        if ($clean2.ExitCode -in @(0,3010)) {
             Write-Status OK 'ResetBase complete - superseded components removed.'
+            if ($clean2.ExitCode -eq 3010) { $Script:RestartRequired=$true }
         } else {
             Write-Status Fail "ResetBase exited with code $($clean2.ExitCode)."
             $Script:HasFailure = $true
@@ -1064,14 +1113,14 @@ function Invoke-DeepCleanup {
         Write-Status Skip 'ResetBase skipped by user.'
     }
 
-    $sw.Stop()
-    Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
-
-    if ($clean1.ExitCode -eq 0) {
+    if ($clean2 -and $clean2.ExitCode -notin @(0,3010)) {
+        $Script:Results['DeepClean']='FAIL - ResetBase incomplete; review native output'
+    } elseif ($clean1.ExitCode -eq 0) {
         $Script:Results['DeepClean'] = 'PASS - Component store cleaned'
     } else {
         $Script:Results['DeepClean'] = 'WARN - Component cleanup incomplete'
     }
+    } finally { $sw.Stop(); Disable-StayAwake; Write-Status Info "Elapsed: $(Get-Elapsed $sw)" }
 }
 
 # ============================================================================
@@ -1280,11 +1329,12 @@ function Invoke-ServiceHealthCheck {
     $running = 0
     $stopped = 0
     $issues = @()
+    $unavailable=0;$disabled=0
 
     foreach ($svc in $criticalServices) {
         try {
             $service = Get-Service -Name $svc.Name -EA SilentlyContinue
-            if ($null -eq $service) { continue }
+            if ($null -eq $service) { $unavailable++; Write-Status Warn ("{0,-38} Unavailable" -f $svc.Display); continue }
 
             if ($service.Status -eq 'Running') {
                 Write-Status OK ("{0,-38} Running" -f $svc.Display)
@@ -1293,7 +1343,8 @@ function Invoke-ServiceHealthCheck {
                 # Deliberately disabled (by the user or a tweak tool) - report
                 # it, but don't fight the user's configuration.
                 Write-Status Warn ("{0,-38} Disabled (not auto-started)" -f $svc.Display)
-            } elseif ($service.StartType -eq 'Manual') {
+                $disabled++
+            } elseif ($service.Status -eq 'Stopped' -and $service.StartType -eq 'Manual') {
                 # Demand-start services (BITS, etc.) sit stopped by design and
                 # Windows launches them when needed - not a problem.
                 Write-Status Info ("{0,-38} Stopped (starts on demand)" -f $svc.Display)
@@ -1309,6 +1360,7 @@ function Invoke-ServiceHealthCheck {
                 }
             }
         } catch {
+            $unavailable++
             Write-Status Warn ("{0,-38} Could not check" -f $svc.Display)
         }
     }
@@ -1330,9 +1382,12 @@ function Invoke-ServiceHealthCheck {
             }
         }
         $Script:Results['Services'] = "WARN - $stopped stopped (attempted restart)"
+    } elseif ($unavailable -or $disabled) {
+        Write-Status Warn "$disabled disabled and $unavailable unavailable service(s); existing configuration preserved."
+        $Script:Results['Services']="WARN - $disabled disabled, $unavailable unavailable services"
     } else {
-        Write-Status OK 'All critical services are healthy.'
-        $Script:Results['Services'] = 'PASS - All critical services running'
+        Write-Status OK 'Critical services are running or ready on demand.'
+        $Script:Results['Services'] = 'PASS - Services running or ready on demand'
     }
 
     $sw.Stop()
@@ -1367,11 +1422,12 @@ function Invoke-StoreReset {
     $count = 0
     $errors = 0
     try {
-        $appxPackages = Get-AppxPackage -AllUsers -EA SilentlyContinue
+        $appxPackages = @(Get-AppxPackage -EA Stop)
         foreach ($pkg in $appxPackages) {
             try {
+                if ([string]::IsNullOrWhiteSpace($pkg.InstallLocation)) { continue }
                 $manifestPath = Join-Path $pkg.InstallLocation 'AppxManifest.xml'
-                if (Test-Path $manifestPath) {
+                if (Test-Path -LiteralPath $manifestPath) {
                     Add-AppxPackage -DisableDevelopmentMode -Register $manifestPath -EA Stop | Out-Null
                     $count++
                 }
@@ -1395,6 +1451,14 @@ function Invoke-StoreReset {
 #  FEATURE: EVENT LOG ERROR SCAN
 # ============================================================================
 
+function Get-FixerEvents {
+    param([string]$LogName,[datetime]$Since,[int]$MaxEvents=20)
+    $readErrors=@()
+    $events=@(Get-WinEvent -FilterHashtable @{LogName=$LogName;Level=1,2;StartTime=$Since} -MaxEvents $MaxEvents -EA SilentlyContinue -ErrorVariable readErrors)
+    if (@($readErrors | Where-Object { $_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*' }).Count) { throw "$LogName event log read failed: $($readErrors[0].Exception.Message)" }
+    return $events
+}
+
 function Invoke-EventLogScan {
     Write-StepHeader 'Event Log Error Scan'
 
@@ -1406,15 +1470,12 @@ function Invoke-EventLogScan {
     $since = (Get-Date).AddHours(-72)
     $totalErrors = 0
     $totalCritical = 0
+    $logUnavailable=$false
 
     # System log
     Write-Status Step 'System Event Log:'
     try {
-        $sysEvents = Get-WinEvent -FilterHashtable @{
-            LogName = 'System'
-            Level = 1,2  # Critical and Error
-            StartTime = $since
-        } -MaxEvents 20 -EA SilentlyContinue
+        $sysEvents = @(Get-FixerEvents -LogName 'System' -Since $since)
 
         if ($sysEvents -and $sysEvents.Count -gt 0) {
             $crit = ($sysEvents | Where-Object { $_.Level -eq 1 }).Count
@@ -1435,6 +1496,7 @@ function Invoke-EventLogScan {
             Write-Status OK 'No critical/error events in last 72 hours.'
         }
     } catch {
+        $logUnavailable=$true
         Write-Status Warn 'Could not read System event log.'
     }
 
@@ -1443,11 +1505,7 @@ function Invoke-EventLogScan {
     # Application log
     Write-Status Step 'Application Event Log:'
     try {
-        $appEvents = Get-WinEvent -FilterHashtable @{
-            LogName = 'Application'
-            Level = 1,2
-            StartTime = $since
-        } -MaxEvents 20 -EA SilentlyContinue
+        $appEvents = @(Get-FixerEvents -LogName 'Application' -Since $since)
 
         if ($appEvents -and $appEvents.Count -gt 0) {
             $crit = ($appEvents | Where-Object { $_.Level -eq 1 }).Count
@@ -1468,6 +1526,7 @@ function Invoke-EventLogScan {
             Write-Status OK 'No critical/error events in last 72 hours.'
         }
     } catch {
+        $logUnavailable=$true
         Write-Status Warn 'Could not read Application event log.'
     }
 
@@ -1477,7 +1536,8 @@ function Invoke-EventLogScan {
     $sw.Stop()
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 
-    if ($totalCritical -gt 0) {
+    if ($logUnavailable) { $Script:Results['EventLog']='WARN - One or more event logs could not be read' }
+    elseif ($totalCritical -gt 0) {
         $Script:Results['EventLog'] = "WARN - $totalCritical critical, $totalErrors errors"
     } elseif ($totalErrors -gt 0) {
         $Script:Results['EventLog'] = "INFO - $totalErrors errors (no critical)"
@@ -1501,30 +1561,17 @@ function Invoke-QuickHealthScan {
     # 1. SFC verify-only
     Write-Status Step 'Checking system file integrity (verify only)...'
     $sfcResult = Invoke-Native-Quiet -FilePath 'sfc.exe' -ArgumentList '/verifyonly'
-    if ($sfcResult.ExitCode -eq 0) {
-        Write-Status OK 'System file integrity OK.'
-    } elseif ($sfcResult.ExitCode -eq 3) {
-        Write-Status Warn 'Integrity violations detected. Run SFC repair [2] to fix.'
-        $issues++
-    } elseif ($sfcResult.ExitCode -eq 2) {
-        Write-Status Warn 'SFC could not complete the integrity check.'
-        $issues++
-    } else {
-        Write-Status Info "SFC verify returned code $($sfcResult.ExitCode)."
-    }
+    Write-Host $sfcResult.Output
+    if ($sfcResult.ExitCode -eq 0) { Write-Status Info 'SFC verification command completed; review the localized integrity verdict above.' }
+    else { Write-Status Warn "SFC verification returned code $($sfcResult.ExitCode); review its output and CBS.log."; $issues++ }
     Write-Host ''
 
     # 2. DISM check health
     Write-Status Step 'Checking component store health...'
     $dismResult = Invoke-Native-Quiet -FilePath 'DISM.exe' -ArgumentList '/Online', '/Cleanup-Image', '/CheckHealth'
-    if ($dismResult.Output -match 'No component store corruption detected') {
-        Write-Status OK 'No component store corruption on record (CheckHealth reflects prior scans).'
-    } elseif ($dismResult.Output -match 'repairable|corruption detected') {
-        Write-Status Warn 'Component store has repairable corruption. Run DISM repair [2].'
-        $issues++
-    } else {
-        Write-Status Info 'Component store check completed.'
-    }
+    Write-Host $dismResult.Output
+    if ($dismResult.ExitCode -eq 0) { Write-Status Info 'DISM CheckHealth completed; review its recorded-corruption verdict above. This is not a fresh full scan.' }
+    else { Write-Status Warn "DISM CheckHealth returned code $($dismResult.ExitCode)."; $issues++ }
     Write-Host ''
 
     # 3. Disk space
@@ -1565,14 +1612,16 @@ function Invoke-QuickHealthScan {
     $svcIssues = 0
     foreach ($svcName in $criticalSvc) {
         $svc = Get-Service -Name $svcName -EA SilentlyContinue
-        if ($svc -and $svc.Status -ne 'Running') {
+        if (-not $svc) { Write-Status Warn "$svcName is unavailable."; $svcIssues++; $issues++ }
+        elseif ($svc.Status -eq 'Stopped' -and $svc.StartType -eq 'Manual') { Write-Status Info "$svcName is idle (starts on demand)." }
+        elseif ($svc.Status -ne 'Running') {
             Write-Status Fail "$svcName ($($svc.DisplayName)) is NOT running."
             $svcIssues++
             $issues++
         }
     }
     if ($svcIssues -eq 0) {
-        Write-Status OK 'All critical services running.'
+        Write-Status OK 'Critical services are running or ready on demand.'
     }
     Write-Host ''
 
@@ -1617,14 +1666,14 @@ function Invoke-QuickHealthScan {
     Write-Host ''
     Write-Host "  $($B.H * 62)" -ForegroundColor DarkGray
     if ($issues -eq 0) {
-        Write-Status OK 'HEALTH SCAN COMPLETE - No issues found.'
+        Write-Status Info 'HEALTH SCAN COMPLETE - Review SFC/DISM output; no additional issues were detected by these checks.'
     } else {
         Write-Status Warn "HEALTH SCAN COMPLETE - $issues issue(s) found."
         Write-Status Info 'Consider running the appropriate repair options.'
     }
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
 
-    $Script:Results['QuickScan'] = if ($issues -eq 0) { 'PASS - Healthy' } else { "WARN - $issues issue(s) found" }
+    $Script:Results['QuickScan'] = if ($issues -eq 0) { 'COMPLETED - Review native integrity verdicts' } else { "WARN - $issues issue(s) found; review native integrity verdicts" }
 }
 
 # ============================================================================
@@ -1672,8 +1721,10 @@ function Invoke-WUHealthCheck {
             $issues++
         } elseif ($svc.Status -eq 'Running') {
             Write-Status OK ("{0,-34} Running" -f $s.Display)
-        } else {
+        } elseif ($svc.Status -eq 'Stopped' -and $svc.StartType -eq 'Manual') {
             Write-Status Info ("{0,-34} Stopped (starts on demand)" -f $s.Display)
+        } else {
+            Write-Status Warn ("{0,-34} {1} / {2}" -f $s.Display,$svc.Status,$svc.StartType); $issues++
         }
     }
     Write-Host ''
@@ -1698,7 +1749,7 @@ function Invoke-WUHealthCheck {
 
     Write-Status Step 'Disk space for updates:'
     try {
-        $sys = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -EA Stop
+        $sys = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $env:SystemDrive) -EA Stop
         $freeGB = [math]::Round($sys.FreeSpace / 1GB, 1)
         if ($freeGB -lt 20) { Write-Status Warn "$freeGB GB free - big feature updates want ~20 GB."; $issues++ }
         else { Write-Status OK "$freeGB GB free." }
@@ -1810,7 +1861,7 @@ function Invoke-NetworkDiagnostics {
                     Write-Status OK "$($d.ServerAddress) -> $($d.DohTemplate) [$fb]"
                 }
             } else {
-                Write-Status Info 'No custom DoH templates registered. Run DNS_Set_Quad9_Mullvad.bat for encrypted DNS.'
+                Write-Status Info 'No DoH templates registered. Use Encrypted DNS in the dashboard for supported providers.'
             }
         } else {
             Write-Status Info 'DoH cmdlets not available on this Windows build (need Win11 / Server 2022+).'
@@ -1858,7 +1909,7 @@ function Invoke-IconCacheRebuild {
     $removed = 0
     try {
         Write-Status Info 'Stopping Explorer...'
-        Get-Process -Name explorer -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+        Get-Process -Name explorer -EA SilentlyContinue | Where-Object { $_.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId } | Stop-Process -Force -EA Stop
         Start-Sleep -Seconds 2
 
         $cacheDir = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
@@ -1878,7 +1929,7 @@ function Invoke-IconCacheRebuild {
         # Windows 11 sometimes auto-restarts Explorer; only launch it if needed
         # (starting it while the shell is running just opens a folder window).
         Start-Sleep -Seconds 1
-        if (-not (Get-Process -Name explorer -EA SilentlyContinue)) {
+        if (-not (Get-Process -Name explorer -EA SilentlyContinue | Where-Object { $_.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId })) {
             Write-Status Info 'Restarting Explorer...'
             Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe')
         }
@@ -1922,26 +1973,9 @@ function Invoke-TimeSyncRepair {
         Write-Status OK 'Time resynchronized successfully.'
         $Script:Results['TimeSync'] = 'PASS - Resynced'
     } else {
-        Write-Status Warn 'Resync failed. Re-registering the time service...'
-        $null = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/unregister'
-        $reg = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/register'
-        if ($reg.ExitCode -ne 0) {
-            Write-Status Fail "Time service re-registration failed (exit code $($reg.ExitCode)). W32Time may be missing - run 'w32tm /register' manually as Administrator."
-            $Script:Results['TimeSync'] = 'FAIL - Re-register failed'
-            $Script:HasFailure = $true
-        } else {
-            [void](Start-ServiceSafely 'W32Time')
-            Start-Sleep -Seconds 2
-            $r2 = Invoke-Native-Quiet -FilePath 'w32tm.exe' -ArgumentList '/resync', '/force'
-            if ($r2.ExitCode -eq 0) {
-                Write-Status OK 'Time service re-registered and resynced.'
-                $Script:Results['TimeSync'] = 'PASS - Re-registered + resynced'
-            } else {
-                Write-Status Fail 'Time sync still failing. Check internet and the BIOS clock/battery.'
-                $Script:Results['TimeSync'] = 'FAIL - Resync failed'
-                $Script:HasFailure = $true
-            }
-        }
+        Write-Status Fail ("Time resync failed (exit {0}): {1}" -f $r.ExitCode,$r.Output)
+        Write-Status Info 'Existing NTP/domain time configuration was preserved. Check connectivity, time source and BIOS clock.'
+        $Script:Results['TimeSync']='FAIL - Resync failed; existing time configuration retained'
     }
 
     Write-Host ''
@@ -2224,26 +2258,26 @@ function Export-HealthReport {
         @{ Name = 'CryptSvc';  Display = 'Cryptographic Services' })) {
         $svc = Get-Service -Name $svcDef.Name -EA SilentlyContinue
         if ($svc) {
-            $cls = if ($svc.Status -eq 'Running') { 'good' } else { 'bad' }
-            $svcRows += "<tr><td>$(ConvertTo-HtmlSafe $svcDef.Display)</td><td class='$cls'>$($svc.Status)</td></tr>"
+            $cls = if ($svc.Status -eq 'Running' -or ($svc.Status -eq 'Stopped' -and $svc.StartType -eq 'Manual')) { 'good' } else { 'warn' }
+            $svcRows += "<tr><td>$(ConvertTo-HtmlSafe $svcDef.Display)</td><td class='$cls'>$($svc.Status) / $($svc.StartType)</td></tr>"
         }
     }
 
     $evtSummary = ''
-    try {
-        $since = $now.AddHours(-72)
-        foreach ($logName in 'System', 'Application') {
-            $evts = @(Get-WinEvent -FilterHashtable @{ LogName = $logName; Level = 1, 2; StartTime = $since } -MaxEvents 50 -EA SilentlyContinue)
+    $since = $now.AddHours(-72)
+    foreach ($logName in 'System', 'Application') {
+        try {
+            $evts = @(Get-FixerEvents -LogName $logName -Since $since -MaxEvents 50)
             $cls = if ($evts.Count -gt 10) { 'warn' } else { 'good' }
             $evtSummary += "<tr><td>$logName log</td><td class='$cls'>$($evts.Count) critical/error events (72h)</td></tr>"
-        }
-    } catch { }
+        } catch { $evtSummary += "<tr><td>$logName log</td><td class='warn'>Unavailable; event log could not be read</td></tr>"; Write-Status Warn $_.Exception.Message }
+    }
 
     $resultRows = ''
     if ($Script:Results.Count -gt 0) {
         foreach ($key in $Script:Results.Keys) {
             $val = $Script:Results[$key]
-            $cls = if ($val -match 'FAIL') { 'bad' } elseif ($val -match 'WARN|SKIP') { 'warn' } else { 'good' }
+            $cls = if ($val -match 'FAIL') { 'bad' } elseif ($val -match 'WARN|SKIP|ATTENTION|Partial') { 'warn' } else { 'good' }
             $resultRows += "<tr><td>$(ConvertTo-HtmlSafe $key)</td><td class='$cls'>$(ConvertTo-HtmlSafe $val)</td></tr>"
         }
     } else {
@@ -2373,7 +2407,7 @@ function Invoke-PerfCounterRepair {
     Write-Status Step 'Resyncing WMI performance data...'
     $rs = Invoke-Native-Quiet -FilePath 'winmgmt.exe' -ArgumentList '/resyncperf'
     if ($rs.ExitCode -eq 0) { Write-Status OK 'WMI counters resynced.' }
-    else { Write-Status Warn "WMI resync returned exit $($rs.ExitCode)." }
+    else { Write-Status Warn "WMI resync returned exit $($rs.ExitCode)."; $okAll=$false }
 
     $sw.Stop()
     Write-Host ''
@@ -2425,13 +2459,14 @@ function Invoke-OrphanServiceScan {
     }
 
     $orphans = @()
+    Import-Module (Join-Path $PSScriptRoot '..\Modules\Toolkit.Core.psm1') -DisableNameChecking -ErrorAction Stop
     foreach ($s in $services) {
         $exe = Get-ServiceExePath $s.PathName
         if (-not $exe) { continue }
         $exe = [System.Environment]::ExpandEnvironmentVariables($exe)
         # Only judge absolute paths; anything else can't be checked reliably.
-        if (-not [System.IO.Path]::IsPathRooted($exe)) { continue }
-        if (-not (Test-Path -LiteralPath $exe)) {
+        if ($s.State -ne 'Stopped') { continue }
+        if (Test-SuiteMissingExecutable $exe) {
             $orphans += [PSCustomObject]@{
                 Name = $s.Name; Display = $s.DisplayName
                 Exe = $exe; StartMode = $s.StartMode
@@ -2443,7 +2478,7 @@ function Invoke-OrphanServiceScan {
     Write-Host ''
 
     if ($orphans.Count -eq 0) {
-        Write-Status OK 'No orphaned services found - every service binary exists.'
+        Write-Status OK 'No stopped services with a confirmed missing local executable were found.'
         $Script:Results['OrphanSvc'] = 'PASS - No orphans'
     } else {
         foreach ($o in $orphans) {
@@ -2462,10 +2497,15 @@ function Invoke-OrphanServiceScan {
             foreach ($o in $orphans) {
                 $ans = Read-Host "  Delete service '$($o.Name)' ($($o.Display))? (y/N)"
                 if ($ans -eq 'y' -or $ans -eq 'Y') {
+                    $current=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $o.Name.Replace("'","''")) -EA Stop
+                    if (-not $current -or $current.State -ne 'Stopped' -or -not (Test-SuiteMissingExecutable ([Environment]::ExpandEnvironmentVariables((Get-ServiceExePath $current.PathName))))) {
+                        Write-Status Warn "Service state/path changed or is no longer confirmed missing: $($o.Name). Not deleting."
+                        continue
+                    }
                     # Back up the service registration before deleting - sc delete has no undo.
                     $backupFile = Join-Path $backupDir ("$($o.Name)_$(Get-Date -Format 'yyyyMMdd_HHmmss').reg")
                     $exp = Invoke-Native-Quiet -FilePath 'reg.exe' -ArgumentList 'export', "HKLM\SYSTEM\CurrentControlSet\Services\$($o.Name)", $backupFile, '/y'
-                    if ($exp.ExitCode -ne 0) {
+                    if ($exp.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $backupFile -PathType Leaf) -or (Get-Item -LiteralPath $backupFile).Length -eq 0) {
                         Write-Status Fail "Registry backup failed for $($o.Name) - not deleting."
                         continue
                     }
@@ -2533,7 +2573,7 @@ function Invoke-FullRepair {
             Enable-StayAwake
             try {
                 switch ($step.Func) {
-                    'sfc'     { Invoke-SfcScan -Step $stepNum -Total $steps.Count }
+                    'sfc'     { if ($Script:Results['DISM'] -like 'COMPLETED*' -and -not $Script:RestartRequired) { Invoke-SfcScan -Step $stepNum -Total $steps.Count } else { $Script:Results['SFC']='SKIP - DISM needs attention or restart'; Write-Status Warn 'SFC deferred until DISM completes without a pending restart.' } }
                     'dism'    { Invoke-DismRepair -Step $stepNum -Total $steps.Count }
                     'caches'  { Invoke-CacheCleanup -Step $stepNum -Total $steps.Count }
                     'networkhealth' { Invoke-NetworkHealthRefresh -Step $stepNum -Total $steps.Count }
@@ -2627,6 +2667,11 @@ function Restore-AiFeatureSnapshot {
     $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     if($snapshot.Schema -ne 1 -or $snapshot.Computer -ne $env:COMPUTERNAME -or $snapshot.User -ne [Security.Principal.WindowsIdentity]::GetCurrent().Name){throw 'This AI policy snapshot belongs to another computer/user or has an unsupported schema.'}
     $restoreErrors = 0
+    $allowed=@(Get-AiFeaturePolicyDefinitions)
+    foreach ($entry in @($snapshot.Entries)) {
+        if (-not @($allowed | Where-Object { $_.Path -eq $entry.Path -and $_.Name -eq $entry.Name }).Count) { throw 'AI policy snapshot contains an unsupported registry target.' }
+        if ($entry.ValueExisted -isnot [bool] -or $entry.PathExisted -isnot [bool] -or ($entry.ValueExisted -and $entry.Kind -notin @('String','ExpandString','MultiString','Binary','QWord','DWord'))) { throw 'AI policy snapshot contains an invalid registry state.' }
+    }
     foreach ($entry in @($snapshot.Entries)) {
         if ([bool]$entry.ValueExisted) {
             if (-not (Test-Path -LiteralPath $entry.Path)) { New-Item -Path $entry.Path -Force | Out-Null }
@@ -2639,10 +2684,10 @@ function Restore-AiFeatureSnapshot {
                 default        { 'DWord' }
             }
             $restoreValue = switch ($propertyType) {
-                'Binary'      { [byte[]]@($entry.Value) }
-                'MultiString' { [string[]]@($entry.Value) }
-                'QWord'       { [uint64]$entry.Value }
-                'DWord'       { [uint32]$entry.Value }
+                'Binary'      { ,([byte[]]@($entry.Value)) }
+                'MultiString' { ,([string[]]@($entry.Value)) }
+                'QWord'       { [long]$entry.Value }
+                'DWord'       { [int]$entry.Value }
                 default       { [string]$entry.Value }
             }
             try { New-ItemProperty -Path $entry.Path -Name $entry.Name -PropertyType $propertyType -Value $restoreValue -Force -ErrorAction Stop | Out-Null }
@@ -2653,7 +2698,7 @@ function Restore-AiFeatureSnapshot {
         }
         try {
             $actual=Get-AiRegistryEntryState $entry.Path $entry.Name
-            if($actual.ValueExisted -ne $entry.ValueExisted -or ($actual.ValueExisted -and ($actual.Kind -ne $entry.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -ne (ConvertTo-Json -InputObject $entry.Value -Compress)))){throw 'AI policy restore read-back failed.'}
+            if($actual.ValueExisted -ne $entry.ValueExisted -or ($actual.ValueExisted -and ($actual.Kind -ne $entry.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -cne (ConvertTo-Json -InputObject $entry.Value -Compress)))){throw 'AI policy restore read-back failed.'}
         } catch { $restoreErrors++ }
     }
     foreach ($pathState in @($snapshot.Entries | Group-Object Path)) {
@@ -2752,7 +2797,7 @@ function Show-Summary {
     } else {
         foreach ($key in $Script:Results.Keys) {
             $val   = $Script:Results[$key]
-            $color = if ($val -match 'FAIL') { 'Red' } elseif ($val -match 'WARN|SKIP') { 'Yellow' } else { 'Green' }
+            $color = if ($val -match 'FAIL') { 'Red' } elseif ($val -match 'WARN|SKIP|ATTENTION|Partial') { 'Yellow' } else { 'Green' }
             $line = "  [$key] $val"
             if ($line.Length -gt $inner) { $line = $line.Substring(0, $inner - 3) + '...' }
             Write-Host "  $($B.V)" -ForegroundColor Cyan -NoNewline
@@ -2780,15 +2825,15 @@ function Show-Summary {
     Write-Host "  $($B.BL)$($B.H * $inner)$($B.BR)" -ForegroundColor Cyan
 
     Write-Host ''
-    if (-not $Script:HasFailure -and $Script:Results.Count -gt 0) {
-        Write-Host '  [OK] ALL OPERATIONS COMPLETED SUCCESSFULLY' -ForegroundColor Green
+    if (-not $Script:HasFailure -and $Script:Results.Count -gt 0 -and -not @($Script:Results.Values | Where-Object { $_ -match 'WARN|FAIL|SKIP|ATTENTION|Partial' }).Count) {
+        Write-Host '  [OK] Commands completed. Review individual results and native integrity verdicts.' -ForegroundColor Green
     } elseif ($Script:Results.Count -gt 0) {
         Write-Host '  [!!] Some operations had warnings or failures - review the log.' -ForegroundColor Yellow
     }
 
     # Check if restart is needed
     $pbr = Test-PendingReboot
-    if ($pbr.Pending -or $Script:Results.ContainsKey('SFC') -or $Script:Results.ContainsKey('DeepClean')) {
+    if ($pbr.Pending -or $Script:RestartRequired) {
         Write-Host ''
         Write-Host '  ==> RESTART YOUR PC NOW for all changes to take effect.' -ForegroundColor Yellow
     }
@@ -2811,7 +2856,7 @@ function Main {
 
         switch ($sel) {
             '1'  { Invoke-FullRepair }
-            '2'  { Invoke-DismRepair; Invoke-SfcScan }
+            '2'  { Invoke-DismRepair; if ($Script:Results['DISM'] -like 'COMPLETED*' -and -not $Script:RestartRequired) { Invoke-SfcScan } else { Write-Status Warn 'SFC repair deferred until DISM completes without a pending restart.' } }
             '3'  { $rb = Read-Host '  Also empty the Recycle Bin? (y/N)'; Invoke-CacheCleanup -IncludeRecycleBin:($rb -match '^[Yy]$') }
             '4'  { Invoke-NetworkReset }
             '5'  { Invoke-DeepCleanup }
@@ -2858,6 +2903,7 @@ try {
     Write-Host ''
     Write-Host '  [!!] FATAL ERROR:' -ForegroundColor Red
     Write-Host "  $_" -ForegroundColor Red
+    Write-FixerDiagnostic Fail ($_ | Out-String)
     Write-Host ''
     Write-Host "  Partial log saved to: $Script:LogPath" -ForegroundColor DarkGray
     Write-Host ''

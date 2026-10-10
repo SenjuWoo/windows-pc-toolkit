@@ -1,35 +1,28 @@
 @echo off
-title PC Privacy Guard v2.1
-setlocal EnableExtensions
+title PC Privacy Guard v2.1.1
+setlocal EnableExtensions DisableDelayedExpansion
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 set "LOG=%LOCALAPPDATA%\Temp\PrivacyGuard_launch.log"
-set "FLAG=%LOCALAPPDATA%\Temp\PrivacyGuard_elevated.flag"
-
-net session >nul 2>&1
-if errorlevel 1 (
-    echo [%date% %time%] not elevated - requesting administrator rights >> "%LOG%"
-    del "%FLAG%" >nul 2>&1
-    "%PS%" -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs" >> "%LOG%" 2>&1
-    "%SystemRoot%\System32\ping.exe" -n 7 127.0.0.1 >nul
-    if not exist "%FLAG%" (
-        echo [%date% %time%] elevation did not complete >> "%LOG%"
-        echo.
-        echo Elevation did not complete - no administrator window appeared.
-        echo Right-click this .bat and choose "Run as administrator".
-        echo Log: %LOG%
-        pause
-    )
-    exit /b
-)
+"%PS%" -NoProfile -Command "$p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 1 }"
+if errorlevel 1 goto Elevate
 
 echo [%date% %time%] elevated start >> "%LOG%"
-echo elevated > "%FLAG%"
-"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0PC_Privacy.ps1"
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0PC_Privacy.ps1" -ExpectedUserSid "%~1"
 set "RC=%ERRORLEVEL%"
-echo [%date% %time%] PC_Privacy.ps1 exited with %RC% >> "%LOG%"
+echo [%date% %time%] toolkit exited with %RC% >> "%LOG%"
 if not "%RC%"=="0" (
-    echo.
-    echo PC Privacy Guard exited with code %RC%. Log: %LOG%
+    echo Toolkit exited with code %RC%. Log: %LOG%
+    pause
+)
+exit /b %RC%
+
+:Elevate
+set "TOOLKIT_LAUNCHER=%~f0"
+echo [%date% %time%] requesting administrator rights >> "%LOG%"
+"%PS%" -NoProfile -Command "try { $p=Start-Process -FilePath $env:TOOLKIT_LAUNCHER -ArgumentList ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) -Verb RunAs -Wait -PassThru -ErrorAction Stop; exit $p.ExitCode } catch { Write-Error $_; exit 1 }" >> "%LOG%" 2>&1
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" (
+    echo Elevation or the toolkit failed. Log: %LOG%
     pause
 )
 exit /b %RC%

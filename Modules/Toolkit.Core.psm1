@@ -4,7 +4,32 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 $script:SuiteRoot=Split-Path $PSScriptRoot -Parent
 $script:SuiteDataRoot=$DataRoot
-$script:SuiteVersion='3.0.0'
+$script:SuiteVersion='3.0.1'
+
+function Write-SuiteDiagnostic {
+    param([string]$Operation,[string]$Message,[string]$Level='Debug',[string]$RunId)
+    if ($Level -eq 'Debug' -and $env:WINDOWS_PC_TOOLKIT_DEBUG -ne '1') { return }
+    try {
+        $directory=Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs'
+        [void][IO.Directory]::CreateDirectory($directory)
+        $path=Join-Path $directory 'Suite.log'
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 5MB) { Move-Item -LiteralPath $path -Destination ($path+'.previous') -Force }
+        $line=[ordered]@{Time=(Get-Date).ToString('o');Version=$script:SuiteVersion;Level=$Level;Operation=$Operation;RunId=$RunId;Message=$Message.Substring(0,[Math]::Min($Message.Length,4096))}
+        [IO.File]::AppendAllText($path,($line | ConvertTo-Json -Compress)+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+    } catch { Write-Verbose "Diagnostic log unavailable: $($_.Exception.Message)" }
+}
+function Assert-SuiteUnlinkedPath {
+    param([string]$Path)
+    $current=[IO.Path]::GetFullPath($Path)
+    while ($current) {
+        if (Test-Path -LiteralPath $current) {
+            if ((Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Toolkit state/package path contains a link: $current" }
+        }
+        $parent=Split-Path $current -Parent
+        if ($parent -eq $current) { break }
+        $current=$parent
+    }
+}
 
 function Resolve-SuitePath {
     param([string[]]$Candidates)
@@ -21,6 +46,7 @@ function Get-SuiteDataRoot { $script:SuiteDataRoot }
 function Get-SuiteVersion { $script:SuiteVersion }
 function Get-SuiteIdentity { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
 function Initialize-SuiteState {
+    Assert-SuiteUnlinkedPath $script:SuiteDataRoot
     if (-not (Test-Path -LiteralPath $script:SuiteDataRoot)) {
         [void][IO.Directory]::CreateDirectory($script:SuiteDataRoot)
         $acl=New-Object Security.AccessControl.DirectorySecurity
@@ -32,10 +58,15 @@ function Initialize-SuiteState {
         }
         Set-Acl -LiteralPath $script:SuiteDataRoot -AclObject $acl
     }
-    foreach ($name in @('Runs','Requests','AppBackups')) { [void][IO.Directory]::CreateDirectory((Join-Path $script:SuiteDataRoot $name)) }
+    foreach ($name in @('Runs','Requests','AppBackups')) {
+        $path=Join-Path $script:SuiteDataRoot $name
+        Assert-SuiteUnlinkedPath $path
+        [void][IO.Directory]::CreateDirectory($path)
+    }
 }
 function Save-SuiteJson {
     param([string]$Path,[object]$Value)
+    Assert-SuiteUnlinkedPath $Path
     $json=$Value | ConvertTo-Json -Depth 16
     $null=$json | ConvertFrom-Json
     $temporary=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
@@ -67,7 +98,7 @@ function Test-SuiteRegistryEqual {
     param($First,$Second)
     if ([bool]$First.Exists -ne [bool]$Second.Exists) { return $false }
     if (-not $First.Exists) { return $true }
-    return ($First.Kind -eq $Second.Kind -and (ConvertTo-Json -InputObject $First.Value -Compress) -eq (ConvertTo-Json -InputObject $Second.Value -Compress))
+    return ($First.Kind -eq $Second.Kind -and (ConvertTo-Json -InputObject $First.Value -Compress) -ceq (ConvertTo-Json -InputObject $Second.Value -Compress))
 }
 function Set-SuiteRegistry {
     param($Run,[string]$Path,[string]$Name,$Value,[string]$Kind='DWord',[switch]$Remove)
@@ -185,6 +216,7 @@ function Test-SuiteMissingExecutable {
     param([string]$Path)
     if (-not $Path -or $Path -notmatch '^[a-zA-Z]:\\' -or [IO.Path]::GetExtension($Path) -ne '.exe') { return $false }
     try {
+        Assert-SuiteUnlinkedPath $Path
         $drive=New-Object IO.DriveInfo([IO.Path]::GetPathRoot($Path))
         if (-not $drive.IsReady -or $drive.DriveType -ne 'Fixed') { return $false }
         [void][IO.File]::GetAttributes($Path)
@@ -219,6 +251,12 @@ function Get-SuiteAppCatalog {
         [pscustomobject]@{Id=$app.PackageFullName;Name=$app.Name;Version=[string]$app.Version;Location=$app.InstallLocation;Detail='Optional consumer app. Removal affects this user and its app data; package reinstall is available.'}
     }
 }
+function Get-SuiteTask {
+    param([string]$Path,[string]$Name)
+    $tasks=@(Get-ScheduledTask -TaskPath $Path -TaskName $Name -ErrorAction Stop | Where-Object { $_.TaskPath -eq $Path -and $_.TaskName -eq $Name })
+    if ($tasks.Count -ne 1) { throw 'The selected scheduled task changed or is missing. Refresh the list.' }
+    return $tasks[0]
+}
 function Invoke-SuiteNative {
     param([string]$File,[string[]]$Arguments,[int[]]$SuccessCodes=@(0),[Text.Encoding]$OutputEncoding)
     $psi=New-Object Diagnostics.ProcessStartInfo
@@ -245,7 +283,7 @@ function Get-SuiteHealth {
     [pscustomobject]@{OS=$os.Caption;Build=$os.BuildNumber;CPU=$cpu.Name;RAMGB=[math]::Round($os.TotalVisibleMemorySize/1MB,1);FreeRAMGB=[math]::Round($os.FreePhysicalMemory/1MB,1);GPU=@(Get-CimInstance Win32_VideoController -ErrorAction Stop | Select-Object Name,DriverVersion);Services=$services;UpdatesDisabled=@($services | Where-Object { $_.Name -in @('wuauserv','BITS','UsoSvc','WaaSMedicSvc') -and $_.StartMode -eq 'Disabled' }).Count;PowerScheme=(Get-ActivePowerSchemeGuid)}
 }
 function Get-SuitePreview {
-    param([string[]]$ActionIds)
+    param([string[]]$ActionIds,[string[]]$StartupIds=@(),[string[]]$AppIds=@())
     $catalog=@(Get-SuiteActionCatalog)
     if ($null -eq $ActionIds) { $ActionIds=@(($catalog | Where-Object Default).Id) }
     foreach ($id in $ActionIds) {
@@ -258,12 +296,29 @@ function Get-SuitePreview {
         }
         [pscustomobject]@{Action=$action.Name;Category=$action.Category;Details=$details;Changes=@($action.Targets).Count}
     }
+    if ($StartupIds.Count) {
+        $items=@(Get-SuiteStartupItems)
+        foreach ($id in $StartupIds | Select-Object -Unique) {
+            $item=@($items | Where-Object Id -eq $id)
+            if ($item.Count -ne 1) { throw 'A selected startup entry changed. Refresh the list.' }
+            [pscustomobject]@{Action='Disable startup: '+$item[0].Name;Category='Reviewed startup';Details=$item[0].Target;Changes=1}
+        }
+    }
+    if ($AppIds.Count) {
+        $items=@(Get-SuiteAppCatalog)
+        foreach ($id in $AppIds | Select-Object -Unique) {
+            $item=@($items | Where-Object Id -eq $id)
+            if ($item.Count -ne 1) { throw 'A selected app changed or is protected. Refresh the list.' }
+            [pscustomobject]@{Action='Remove app: '+$item[0].Name;Category='Reviewed apps';Details='Verified package backup first; app data may be deleted.';Changes=1}
+        }
+    }
 }
 function Add-SuiteStep {
     param($Run,[string]$Action,[string]$Status,[string]$Message)
     [void]$Run.Steps.Add([pscustomobject]@{Action=$Action;Status=$Status;Message=$Message;Time=(Get-Date).ToString('o')})
     $Run.Message=$Message
     Save-SuiteJson $Run.Path $Run
+    Write-SuiteDiagnostic -Operation $Action -Message $Message -RunId $Run.Id -Level $(if ($Status -eq 'Failed') { 'Error' } else { 'Debug' })
 }
 function Invoke-SuiteRun {
     param([string[]]$ActionIds,[string[]]$StartupIds=@(),[string[]]$AppIds=@(),[scriptblock]$Progress)
@@ -319,7 +374,7 @@ function Invoke-SuiteRun {
                         $result=Disable-WindowsOptionalFeature -Online -FeatureName Recall -NoRestart -ErrorAction Stop
                         $actual=[string](Get-WindowsOptionalFeature -Online -FeatureName Recall -ErrorAction Stop).State
                         if ($actual -notin @('Disabled','DisabledWithPayloadRemoved','DisablePending')) { throw 'Recall disable read-back failed.' }
-                        $entry.After=$actual; $entry.Status='Applied'; Save-SuiteJson $run.Path $run
+                        $entry.After=if ($actual -eq 'DisablePending') { 'Disabled' } else { $actual }; $entry.Status='Applied'; Save-SuiteJson $run.Path $run
                         $message='Recall disabled through Windows servicing. Feature payload kept for undo; snapshot data is not restored.'
                         if ($result.RestartNeeded -or $actual -eq 'DisablePending') { $message+=' Restart Windows to finish.' }
                     }
@@ -339,7 +394,10 @@ function Invoke-SuiteRun {
                     }
                     'RegistryCare' {
                         $count=0
-                        foreach ($item in Get-SuiteStartupItems | Where-Object { $_.Kind -eq 'Startup' -and $_.Missing }) { Set-SuiteRegistry $run $item.Path $item.ValueName $null -Remove; $count++ }
+                        foreach ($item in Get-SuiteStartupItems | Where-Object { $_.Kind -eq 'Startup' -and $_.Missing }) {
+                            $current=Get-RegistryValueState $item.Path $item.ValueName
+                            if ($current.Exists -and (Test-SuiteMissingExecutable (Get-CommandTargetPath ([string]$current.Value)))) { Set-SuiteRegistry $run $item.Path $item.ValueName $null -Remove; $count++ }
+                        }
                         foreach ($issue in Get-RegistryIssues | Where-Object { $_.Category -eq 'Stale MuiCache entries' }) {
                             if (Test-SuiteMissingExecutable $issue.Display) { Set-SuiteRegistry $run $issue.Key $issue.Name $null -Remove; $count++ }
                         }
@@ -384,11 +442,12 @@ function Invoke-SuiteStartupDisable {
             try {
                 if ($item.Kind -eq 'Startup') { Set-SuiteRegistry $run $item.Path $item.ValueName $null -Remove }
                 else {
-                    $task=Get-ScheduledTask -TaskPath $item.Path -TaskName $item.ValueName -ErrorAction Stop
+                    $task=Get-SuiteTask $item.Path $item.ValueName
+                    if (-not $task.Settings.Enabled) { Add-SuiteStep $run $item.Name 'Skipped' 'Startup task was already disabled.'; continue }
                     $entry=[pscustomobject]@{Path=$item.Path;Name=$item.ValueName;Enabled=[bool]$task.Settings.Enabled;Status='Pending'}
                     [void]$run.Tasks.Add($entry); Save-SuiteJson $run.Path $run
-                    Disable-ScheduledTask -TaskPath $item.Path -TaskName $item.ValueName -ErrorAction Stop | Out-Null
-                    if ((Get-ScheduledTask -TaskPath $item.Path -TaskName $item.ValueName -ErrorAction Stop).Settings.Enabled) { throw 'Task disable verification failed.' }
+                    Disable-ScheduledTask -InputObject $task -ErrorAction Stop | Out-Null
+                    if ((Get-SuiteTask $item.Path $item.ValueName).Settings.Enabled) { throw 'Task disable verification failed.' }
                     $entry.Status='Applied'
                 }
                 Add-SuiteStep $run $item.Name 'Applied' 'Startup item disabled; original state saved.'
@@ -411,20 +470,23 @@ function Invoke-SuiteAppRemoval {
         foreach ($app in $available | Where-Object { $Ids -contains $_.Id }) {
             try {
                 $source=Get-Item -LiteralPath $app.Location -ErrorAction Stop
+                Assert-SuiteUnlinkedPath $source.FullName
                 if ($source.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package folder is a link; kept the app.' }
                 if (@(Get-ChildItem -LiteralPath $source.FullName -Recurse -Force -ErrorAction Stop | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'Package contains linked files/folders; kept the app.' }
                 $backup=Join-Path $script:SuiteDataRoot ('AppBackups\'+$run.Id+'\'+$app.Id)
+                Assert-SuiteUnlinkedPath $backup
                 [void][IO.Directory]::CreateDirectory($backup)
                 # robocopy preserves long package paths and skips junctions. Codes 0-7 are success.
                 $null=Invoke-SuiteNative "$env:SystemRoot\System32\robocopy.exe" @($app.Location,$backup,'/E','/XJ','/R:0','/W:0','/NFL','/NDL','/NJH','/NJS') @(0,1,2,3,4,5,6,7)
                 if (-not (Test-Path -LiteralPath (Join-Path $backup 'AppxManifest.xml'))) { throw 'Package backup is incomplete; kept the app.' }
-                foreach ($file in Get-ChildItem -LiteralPath $source.FullName -Recurse -File -Force -ErrorAction Stop) {
+                $hashes=@(foreach ($file in Get-ChildItem -LiteralPath $source.FullName -Recurse -File -Force -ErrorAction Stop) {
                     if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'A package file is a link; kept the app.' }
                     $relative=$file.FullName.Substring($source.FullName.TrimEnd('\').Length).TrimStart('\')
                     $copy=Join-Path $backup $relative
                     if (-not (Test-Path -LiteralPath $copy) -or (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash) { throw 'Package backup verification failed; kept the app.' }
-                }
-                $entry=[pscustomobject]@{Name=$app.Name;Package=$app.Id;Backup=$backup;Status='Pending'}
+                    [pscustomobject]@{RelativePath=$relative;Hash=(Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash}
+                })
+                $entry=[pscustomobject]@{Name=$app.Name;Package=$app.Id;Backup=$backup;Files=$hashes;Status='Pending'}
                 [void]$run.Apps.Add($entry); Save-SuiteJson $run.Path $run
                 Remove-AppxPackage -Package $app.Id -ErrorAction Stop
                 if (Get-AppxPackage -Name $app.Name -ErrorAction Stop) { throw 'Package is still installed.' }
@@ -438,8 +500,13 @@ function Invoke-SuiteAppRemoval {
 function Get-SuiteHistory {
     $directory=Join-Path $script:SuiteDataRoot 'Runs'
     if (-not (Test-Path -LiteralPath $directory)) { return }
+    Assert-SuiteUnlinkedPath $directory
     foreach ($file in Get-ChildItem -LiteralPath $directory -Filter '*.json' -File | Sort-Object Name -Descending) {
-        try { $run=Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json; if ($run.UserSid -eq (Get-SuiteIdentity)) { $run } } catch { Write-Warning "Unreadable report: $($file.Name)" }
+        try {
+            Assert-SuiteUnlinkedPath $file.FullName
+            $run=Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($run.Schema -eq 1 -and $run.Computer -eq $env:COMPUTERNAME -and $run.UserSid -eq (Get-SuiteIdentity)) { $run.Path=$file.FullName; $run }
+        } catch { Write-Warning "Unreadable report: $($file.Name)" }
     }
 }
 function Invoke-SuiteUndo {
@@ -448,9 +515,14 @@ function Invoke-SuiteUndo {
     $full=[IO.Path]::GetFullPath($Path)
     $root=[IO.Path]::GetFullPath((Join-Path $script:SuiteDataRoot 'Runs')).TrimEnd('\')+'\'
     if (-not $full.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($full) -ne '.json') { throw 'Select a report from this toolkit history.' }
+    Assert-SuiteUnlinkedPath $full
     $run=Get-Content -LiteralPath $full -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($run.Schema -ne 1 -or $run.Computer -ne $env:COMPUTERNAME -or $run.UserSid -ne (Get-SuiteIdentity)) { throw 'This backup belongs to another computer/user or uses an unsupported schema.' }
     if ($run.Status -eq 'Restored') { $run.Message='This operation was already restored. Current settings have been preserved.'; return $run }
+    if (-not (@($run.Registry).Count + @($run.Tasks).Count + @($run.Apps).Count) -and
+        -not ($run.PSObject.Properties.Name -contains 'Features' -and @($run.Features).Count) -and
+        -not ($run.PSObject.Properties.Name -contains 'DnsBackup' -and $run.DnsBackup)) { throw 'This report contains no reversible changes. Repair and cache/temp deletion cannot be undone.' }
+    $run.Path=$full
     $lock=Enter-SuiteOperation
     try {
         $errors=New-Object Collections.ArrayList
@@ -467,9 +539,9 @@ function Invoke-SuiteUndo {
         foreach ($entry in @($run.Tasks)) {
             try {
                 if ($entry.Status -eq 'Restored') { continue }
-                $task=Get-ScheduledTask -TaskPath $entry.Path -TaskName $entry.Name -ErrorAction Stop
-                if ($entry.Enabled -and -not $task.Settings.Enabled) { Enable-ScheduledTask -TaskPath $entry.Path -TaskName $entry.Name -ErrorAction Stop | Out-Null }
-                if ([bool](Get-ScheduledTask -TaskPath $entry.Path -TaskName $entry.Name -ErrorAction Stop).Settings.Enabled -ne [bool]$entry.Enabled) { throw 'Task was changed after optimization; current state preserved.' }
+                $task=Get-SuiteTask $entry.Path $entry.Name
+                if ($entry.Enabled -and -not $task.Settings.Enabled) { Enable-ScheduledTask -InputObject $task -ErrorAction Stop | Out-Null }
+                if ([bool](Get-SuiteTask $entry.Path $entry.Name).Settings.Enabled -ne [bool]$entry.Enabled) { throw 'Task was changed after optimization; current state preserved.' }
                 $entry.Status='Restored'
             } catch { [void]$errors.Add($_.Exception.Message) }
             Save-SuiteJson $full $run
@@ -478,6 +550,20 @@ function Invoke-SuiteUndo {
             try {
                 if ($entry.Status -eq 'Restored') { continue }
                 if (-not (Get-AppxPackage -Name $entry.Name -ErrorAction Stop)) {
+                    $backup=[IO.Path]::GetFullPath($entry.Backup).TrimEnd('\')+'\'
+                    $backupRoot=[IO.Path]::GetFullPath((Join-Path $script:SuiteDataRoot 'AppBackups')).TrimEnd('\')+'\'
+                    if (-not $backup.StartsWith($backupRoot,[StringComparison]::OrdinalIgnoreCase)) { throw 'App backup is outside toolkit storage.' }
+                    Assert-SuiteUnlinkedPath $backup
+                    if (@(Get-ChildItem -LiteralPath $backup -Recurse -Force -ErrorAction Stop | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'App backup contains links; use Microsoft Store to reinstall.' }
+                    if ($entry.PSObject.Properties.Name -notcontains 'Files' -or -not @($entry.Files).Count) { throw 'Legacy app backup has no saved hashes. Reinstall this app using Microsoft Store.' }
+                    $files=@(Get-ChildItem -LiteralPath $backup -Recurse -File -Force -ErrorAction Stop)
+                    if ($files.Count -ne @($entry.Files).Count) { throw 'App backup contents changed; use Microsoft Store to reinstall.' }
+                    foreach ($file in $entry.Files) {
+                        $copy=[IO.Path]::GetFullPath((Join-Path $backup $file.RelativePath))
+                        if (-not $copy.StartsWith($backup,[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid app backup file path.' }
+                        Assert-SuiteUnlinkedPath $copy
+                        if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256 -ErrorAction Stop).Hash -cne $file.Hash) { throw 'App backup hash changed; use Microsoft Store to reinstall.' }
+                    }
                     Add-AppxPackage -Register (Join-Path $entry.Backup 'AppxManifest.xml') -DisableDevelopmentMode -ErrorAction Stop
                 }
                 if (-not (Get-AppxPackage -Name $entry.Name -ErrorAction Stop)) { throw "Reinstall failed: $($entry.Name). Use Microsoft Store to reinstall." }
@@ -492,7 +578,7 @@ function Invoke-SuiteUndo {
                     $current=[string](Get-WindowsOptionalFeature -Online -FeatureName $entry.Name -ErrorAction Stop).State
                     if ($current -eq $entry.Before) { $entry.Status='Restored'; continue }
                     if ($current -in @('EnablePending','DisablePending')) { throw 'Restart Windows before restoring the Recall feature.' }
-                    if ($current -ne $entry.After) { throw 'Windows feature changed since optimization; current state preserved.' }
+                    if ($current -ne $entry.After -and -not ($entry.After -eq 'DisablePending' -and $current -eq 'Disabled')) { throw 'Windows feature changed since optimization; current state preserved.' }
                     $result=Enable-WindowsOptionalFeature -Online -FeatureName $entry.Name -NoRestart -ErrorAction Stop
                     $actual=[string](Get-WindowsOptionalFeature -Online -FeatureName $entry.Name -ErrorAction Stop).State
                     if ($actual -eq 'EnablePending' -or $result.RestartNeeded) { throw 'Recall restore requested. Restart Windows, then retry undo to verify.' }
@@ -519,13 +605,14 @@ function Invoke-SuiteRepair {
         $run=New-SuiteRun 'Repair'
         try { Enable-StayAwake } catch { Add-SuiteStep $run 'Stay awake' 'Warning' $_.Exception.Message }
         foreach ($step in @(
-            @{Name='DISM component-store repair';File='dism.exe';Args=@('/Online','/Cleanup-Image','/RestoreHealth')},
+            @{Name='DISM component-store repair';File='dism.exe';Args=@('/Online','/Cleanup-Image','/RestoreHealth','/NoRestart')},
             @{Name='SFC system-file scan';File='sfc.exe';Args=@('/scannow')})) {
             $run.Message='Running: '+$step.Name; Save-SuiteJson $run.Path $run
             if ($Progress) { & $Progress $run }
             try {
                 $native=Invoke-SuiteNative (Join-Path "$env:SystemRoot\System32" $step.File) $step.Args @(0,3010)
                 Add-SuiteStep $run $step.Name 'Completed' ($native.Output+$(if ($native.RestartRequired) { ' Restart required.' } else { '' }))
+                if ($native.RestartRequired) { Add-SuiteStep $run 'Remaining repair commands' 'Skipped' 'Restart Windows before continuing system repair.'; break }
             } catch { Add-SuiteStep $run $step.Name 'Failed' $_.Exception.Message; break }
         }
         $run.Status=if (@($run.Steps | Where-Object Status -eq 'Failed').Count) { 'CompletedWithErrors' } else { 'Completed' }

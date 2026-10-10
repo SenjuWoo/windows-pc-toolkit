@@ -28,7 +28,7 @@ Use built-in Windows PowerShell 5.1 on Windows, with STA for the WPF tests:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_All.ps1
 ```
 
 Tests create disposable registry/filesystem fixtures and use simulated mutation commands for DNS, AppX, optional features and update repair. They exercise native WPF/jobs, stay-awake and read-only inventories; they do not optimize or repair the host. CI runs the same suite in both supported folder layouts. See [validation details](VALIDATION_REPORT.md).

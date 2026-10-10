@@ -1,5 +1,11 @@
 ﻿#requires -version 5.1
+param([switch]$DebugLog,[string]$ExpectedUserSid)
+if ($ExpectedUserSid -and $ExpectedUserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) {
+    Write-Error 'Elevation switched Windows accounts. Launch from an administrator account belonging to the intended user.'
+    exit 1
+}
 $ErrorActionPreference='Continue'
+if ($DebugLog) { $env:WINDOWS_PC_TOOLKIT_DEBUG='1' }
 Import-Module (Join-Path $PSScriptRoot 'Modules\Optimizer.Core.psm1') -Force
 Initialize-GamingToolkit
 
@@ -46,7 +52,7 @@ while ($true) {
             '4' { Invoke-GameBooster }
             '5' { Show-GpuAudit }
             '6' { Show-NetworkAudit; $clean=Read-Host '  Remove old v3.x network tweaks now? (y/N)'; if($clean -match '^[Yy]$'){Invoke-LegacyNetworkCleanup} }
-            '7' { Show-StorageAudit; $trim=Read-Host '  Run official ReTrim on fixed NTFS volumes? (y/N)'; if($trim -match '^[Yy]$'){Invoke-SafeRetrim} }
+            '7' { Show-StorageAudit; $trim=Read-Host '  Run official ReTrim on confirmed fixed SSD volumes? (y/N)'; if($trim -match '^[Yy]$'){Invoke-SafeRetrim} }
             '8' { Show-MemoryAudit }
             '9' { Show-TimerAudit; $clean=Read-Host '  Remove legacy BCD timer overrides? (y/N)'; if($clean -match '^[Yy]$'){Invoke-LegacyTimerCleanup} }
             '10' { Show-GpuMsiAudit }

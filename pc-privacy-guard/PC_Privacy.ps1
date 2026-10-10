@@ -1,21 +1,35 @@
 ﻿#requires -version 5.1
 <#[
-PC Privacy Guard v2.1
+PC Privacy Guard v2.1.1
 Balanced and strict privacy profiles with exact state snapshots. The default
 profile reduces personalization and activity upload without disabling services
 needed by Windows Update, Insider builds, games, browsers, or device features.
 ]#>
+param([switch]$DebugLog,[AllowEmptyString()][string]$ExpectedUserSid)
 $ErrorActionPreference='Stop'
-$Version='2.1'
+$Version='2.1.1'
 $StateRoot=Join-Path $env:ProgramData 'WindowsPCToolkit\PrivacyGuard'
 $SnapshotRoot=Join-Path $StateRoot 'Snapshots'
 $script:CurrentSnapshot=$null
+$PrivacyDebug=($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1')
+$PrivacyLog=Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\PrivacyGuard.log'
+function Write-PrivacyDiagnostic {
+    param([string]$Kind,[string]$Message)
+    if (-not $PrivacyDebug -and $Kind -notin @('FAIL','WARN')) { return }
+    try {
+        if ($Message.Length -gt 4096) { $Message=$Message.Substring(0,4096) }
+        [IO.Directory]::CreateDirectory((Split-Path $PrivacyLog -Parent))|Out-Null
+        [pscustomobject]@{Time=(Get-Date).ToString('o');Version=$Version;Kind=$Kind;Message=$Message} | ConvertTo-Json -Compress | Add-Content -LiteralPath $PrivacyLog -Encoding UTF8
+    } catch { Write-Warning "Privacy diagnostic log could not be written: $($_.Exception.Message)" }
+}
+Write-PrivacyDiagnostic 'DEBUG' "Startup: state=$StateRoot; snapshots=$SnapshotRoot"
 
 function Write-Status {
     param([ValidateSet('OK','INFO','WARN','FAIL','STEP')][string]$Kind,[string]$Message)
     $color=switch($Kind){'OK'{'Green'}'INFO'{'Cyan'}'WARN'{'Yellow'}'FAIL'{'Red'}default{'White'}}
     $tag=switch($Kind){'OK'{'[OK]'}'INFO'{'[i]'}'WARN'{'[!!]'}'FAIL'{'[X]'}default{'[>>]'}}
     Write-Host ("  {0} {1}" -f $tag,$Message) -ForegroundColor $color
+    Write-PrivacyDiagnostic $Kind $Message
 }
 function Test-Admin {
     $p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -32,16 +46,20 @@ function Get-RegState{
 function Set-RegExact{
     param([string]$Path,[string]$Name,[object]$Value,[string]$Kind='DWord')
     if(-not(Test-Path -LiteralPath $Path)){New-Item -Path $Path -Force|Out-Null}
-    $type=switch($Kind){'String'{'String'}'ExpandString'{'ExpandString'}'Binary'{'Binary'}'DWord'{'DWord'}'MultiString'{'MultiString'}'QWord'{'QWord'}default{'String'}}
-    $typed=switch($type){'Binary'{[byte[]]@($Value)}'DWord'{[int]$Value}'QWord'{[long]$Value}'MultiString'{[string[]]@($Value)}default{$Value}}
+    if ($Kind -notin @('String','ExpandString','Binary','DWord','MultiString','QWord')) { throw "Unsupported registry value type: $Kind" }
+    $type=$Kind
+    $typed=$Value
+    switch($type){'Binary'{$typed=[byte[]]@($Value)}'DWord'{$typed=[int]$Value}'QWord'{$typed=[long]$Value}'MultiString'{$typed=[string[]]@($Value)}}
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $typed -PropertyType $type -Force|Out-Null
+    $actual=Get-RegState $Path $Name
+    if (-not $actual.Exists -or $actual.Kind -ne $type -or (ConvertTo-Json -InputObject $actual.Value -Compress) -cne (ConvertTo-Json -InputObject $typed -Compress)) { throw "Registry write read-back failed: $Path\$Name" }
 }
 function Restore-RegState{
     param([pscustomobject]$State)
     if($State.Exists){Set-RegExact $State.Path $State.Name $State.Value $State.Kind}
     elseif((Get-RegState $State.Path $State.Name).Exists){Remove-ItemProperty -LiteralPath $State.Path -Name $State.Name -ErrorAction Stop}
     $actual=Get-RegState $State.Path $State.Name
-    if($actual.Exists -ne $State.Exists -or ($actual.Exists -and ($actual.Kind -ne $State.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -ne (ConvertTo-Json -InputObject $State.Value -Compress)))){throw "Registry restore read-back failed: $($State.Path)\$($State.Name)"}
+    if($actual.Exists -ne $State.Exists -or ($actual.Exists -and ($actual.Kind -ne $State.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -cne (ConvertTo-Json -InputObject $State.Value -Compress)))){throw "Registry restore read-back failed: $($State.Path)\$($State.Name)"}
 }
 function Get-PrivacyTargets{
     @(
@@ -105,14 +123,22 @@ function Get-TaskTargets{
 }
 function New-PrivacySnapshot{
     param([string]$Reason='Privacy change')
+    Write-PrivacyDiagnostic 'DEBUG' "Snapshot requested: $Reason"
     Initialize-State
     $regs=foreach($t in Get-PrivacyTargets){Get-RegState $t.P $t.N}
-    $services=foreach($name in @('DiagTrack','dmwappushservice')){$s=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $name) -ErrorAction SilentlyContinue;if($s){[pscustomobject]@{Name=$name;StartMode=$s.StartMode;State=$s.State}}}
-    $tasks=foreach($t in Get-TaskTargets){$task=Get-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue;if($task){[pscustomobject]@{Path=$t.Path;Name=$t.Name;Enabled=($task.State -ne 'Disabled')}}}
-    $obj=[pscustomobject]@{Schema=1;Version=$Version;Created=(Get-Date).ToString('o');Reason=$Reason;Registry=@($regs);Services=@($services);Tasks=@($tasks)}
-    $path=Join-Path $SnapshotRoot ("privacy_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
+    $services=@(Get-CimInstance Win32_Service -Filter "Name='DiagTrack' OR Name='dmwappushservice'" -ErrorAction Stop | ForEach-Object {
+        if ($_.StartMode -notin @('Auto','Manual','Disabled') -or $_.State -notin @('Running','Stopped')) { throw "Service is not in a restorable state: $($_.Name) ($($_.StartMode), $($_.State)). Retry after it settles." }
+        [pscustomobject]@{Name=$_.Name;StartMode=$_.StartMode;State=$_.State;DelayedAutoStart=(Get-RegState "HKLM:\SYSTEM\CurrentControlSet\Services\$($_.Name)" 'DelayedAutoStart')}
+    })
+    $availableTasks=@(Get-ScheduledTask -ErrorAction Stop)
+    $tasks=foreach($t in Get-TaskTargets){$task=$availableTasks | Where-Object { $_.TaskPath -eq $t.Path -and $_.TaskName -eq $t.Name };if($task){[pscustomobject]@{Path=$t.Path;Name=$t.Name;Enabled=[bool]$task.Settings.Enabled}}}
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    $obj=[pscustomobject]@{Schema=1;Version=$Version;Computer=$env:COMPUTERNAME;User=$identity.Name;UserSid=$identity.User.Value;Created=(Get-Date).ToString('o');Reason=$Reason;Registry=@($regs);Services=@($services);Tasks=@($tasks)}
+    $path=Join-Path $SnapshotRoot ("privacy_{0}_{1}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'),[guid]::NewGuid().ToString('N'))
     $obj|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $path -Encoding UTF8
-    Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding ASCII
+    $verified=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ((ConvertTo-Json -InputObject $verified -Depth 8 -Compress) -ne (ConvertTo-Json -InputObject $obj -Depth 8 -Compress)) { throw 'Privacy backup verification failed; no privacy settings were changed.' }
+    Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8
     $script:CurrentSnapshot=$path
     Write-Status OK ("Safety snapshot saved: {0}" -f $path)
     return $path
@@ -124,13 +150,22 @@ function Get-LatestSnapshot{
 }
 function Restore-LatestSnapshot{
     Assert-Admin;Initialize-State;$path=Get-LatestSnapshot;if(-not $path){Write-Status WARN 'No Privacy Guard snapshot exists.';return}
-    $snap=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-    if($snap.Computer -ne $env:COMPUTERNAME -or $snap.User -ne [Security.Principal.WindowsIdentity]::GetCurrent().Name){throw 'This privacy snapshot belongs to another computer or user.'}
+    $snap=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-Json
+    if ($snap.PSObject.Properties.Name -contains 'Schema' -and $snap.Schema -ne 1) { throw 'Unsupported privacy backup schema.' }
+    $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($snap.PSObject.Properties.Name -notcontains 'Computer' -or $snap.PSObject.Properties.Name -notcontains 'User') {
+        Write-Status WARN 'This legacy privacy backup did not record its computer or user. Its origin cannot be verified.'
+        if ((Read-Host '  Restore this legacy backup to the current computer and user? (y/N)') -notmatch '^[Yy]$') { throw 'Legacy privacy restore cancelled; no settings were changed.' }
+    } elseif ($snap.Computer -ne $env:COMPUTERNAME -or ($snap.PSObject.Properties.Name -contains 'UserSid' -and $snap.UserSid -ne $identity.User.Value) -or ($snap.PSObject.Properties.Name -notcontains 'UserSid' -and $snap.User -ne $identity.Name)) { throw 'This privacy snapshot belongs to another computer or user.' }
+    foreach($s in @($snap.Services)) {
+        if ($s.StartMode -notin @('Auto','Manual','Disabled') -or $s.State -notin @('Running','Stopped')) { throw "Unsupported saved service state: $($s.Name). No settings were changed." }
+    }
     foreach($s in @($snap.Registry)){Restore-RegState $s}
     foreach($s in @($snap.Services)){
         $type=switch($s.StartMode){'Auto'{'Automatic'}'Manual'{'Manual'}'Disabled'{'Disabled'}default{$null}}
         if(-not $type){throw "Unsupported saved service mode: $($s.Name)"}
         Set-Service -Name $s.Name -StartupType $type -ErrorAction Stop
+        if ($s.PSObject.Properties.Name -contains 'DelayedAutoStart') { Restore-RegState $s.DelayedAutoStart }
         if($s.State -eq 'Running'){Start-Service -Name $s.Name -ErrorAction Stop}elseif($s.State -eq 'Stopped'){Stop-Service -Name $s.Name -Force -ErrorAction Stop}
         $actual=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $s.Name) -ErrorAction Stop
         if($actual.StartMode -ne $s.StartMode -or $actual.State -ne $s.State){throw "Service restore read-back failed: $($s.Name)"}
@@ -207,8 +242,20 @@ function Apply-CloudSearchPrivacy{
 }
 function Apply-StrictTelemetryServiceProfile{
     Ensure-Snapshot 'Strict telemetry service profile'
-    foreach($name in @('DiagTrack','dmwappushservice')){if(Get-Service -Name $name -ErrorAction SilentlyContinue){Stop-Service -Name $name -Force -ErrorAction SilentlyContinue;Set-Service -Name $name -StartupType Disabled -ErrorAction SilentlyContinue;Write-Status OK ("Disabled service: {0}" -f $name)}}
-    foreach($t in Get-TaskTargets){if(Get-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue){Disable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction SilentlyContinue|Out-Null;Write-Status OK ("Disabled task: {0}{1}" -f $t.Path,$t.Name)}}
+    $snapshot=Get-Content -LiteralPath $script:CurrentSnapshot -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach($saved in @($snapshot.Services)){
+        $name=$saved.Name
+        Stop-Service -Name $name -Force -ErrorAction Stop
+        Set-Service -Name $name -StartupType Disabled -ErrorAction Stop
+        $actual=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $name) -ErrorAction Stop
+        if (-not $actual -or $actual.StartMode -ne 'Disabled' -or $actual.State -ne 'Stopped') { throw "Service disable read-back failed: $name" }
+        Write-Status OK ("Disabled service: {0}" -f $name)
+    }
+    foreach($t in @($snapshot.Tasks)){
+        Disable-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop|Out-Null
+        if ([bool](Get-ScheduledTask -TaskPath $t.Path -TaskName $t.Name -ErrorAction Stop).Settings.Enabled) { throw "Task disable read-back failed: $($t.Name)" }
+        Write-Status OK ("Disabled task: {0}{1}" -f $t.Path,$t.Name)
+    }
     Write-Status WARN 'Strict mode can reduce diagnostic data available to Microsoft support and compatibility analysis.'
     Write-Status INFO 'Windows Update, BITS, Delivery Optimization, DNS Client, Defender, Store, Xbox, audio, GPU, camera, microphone, and Windows Insider Service were not disabled.'
 }
@@ -282,9 +329,12 @@ function Show-Menu{
     Write-Host ''
 }
 
-Assert-Admin;Initialize-State
+try {
+    if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) { throw 'Privacy Guard was elevated as a different Windows user. Run with administrator rights for your own account; no privacy settings were changed.' }
+    Assert-Admin;Initialize-State
+} catch { Write-PrivacyDiagnostic 'FAIL' $_.Exception.Message; throw }
 while($true){
-    $script:CurrentSnapshot=$null;Show-Header;Show-Dashboard;Show-Menu;$c=(Read-Host '  Select').Trim().ToUpperInvariant()
+    $script:CurrentSnapshot=$null;Show-Header;Show-Dashboard;Show-Menu;$c=(Read-Host '  Select').Trim().ToUpperInvariant();Write-PrivacyDiagnostic 'DEBUG' "Selected action: $c"
     try{switch($c){'A'{Apply-BalancedProfile}'S'{Apply-StrictProfile}'1'{New-PrivacySnapshot 'Personalization privacy'|Out-Null;Apply-PersonalizationPrivacy}'2'{New-PrivacySnapshot 'Activity privacy'|Out-Null;Apply-ActivityPrivacy}'3'{New-PrivacySnapshot 'Required diagnostics policy'|Out-Null;Apply-RequiredDiagnostics}'4'{New-PrivacySnapshot 'Browser telemetry policies'|Out-Null;Apply-BrowserTelemetryPolicies}'5'{New-PrivacySnapshot 'Location privacy'|Out-Null;Apply-LocationPrivacy}'6'{New-PrivacySnapshot 'Cloud search privacy'|Out-Null;Apply-CloudSearchPrivacy}'7'{New-PrivacySnapshot 'Delivery Optimization privacy'|Out-Null;Apply-DeliveryOptimizationPrivacy}'8'{New-PrivacySnapshot 'Strict telemetry services'|Out-Null;Apply-StrictTelemetryServiceProfile}'D'{Open-DnsManager}'U'{Restore-LatestSnapshot}'0'{break}default{Write-Status WARN 'Invalid selection.'}}}catch{Write-Status FAIL $_.Exception.Message}
     if($c -eq '0'){break};Write-Host '';Read-Host '  Press Enter to continue'|Out-Null
 }

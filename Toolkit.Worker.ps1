@@ -1,16 +1,19 @@
 ﻿#requires -version 5.1
 param([Parameter(Mandatory)][string]$RequestPath)
 $ErrorActionPreference='Stop'
-Import-Module (Join-Path $PSScriptRoot 'Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
-$request=Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $resultPath=$RequestPath+'.result.json'
 $progressPath=$RequestPath+'.progress.json'
-$progress={param($run) Save-SuiteJson -Path $progressPath -Value $run}
+$report=$null
 try {
+    Import-Module (Join-Path $PSScriptRoot 'Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
+    Assert-SuiteUnlinkedPath $RequestPath
+    $request=Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $progress={param($run) Save-SuiteJson -Path $progressPath -Value $run}
+    Write-SuiteDiagnostic 'Worker startup' "Operation=$($request.Operation); DataRoot=$(Get-SuiteDataRoot); Request=$RequestPath"
     $data=$null; $report=$null; $message='Completed'; $status='Completed'
     switch ($request.Operation) {
-        'Preview' { $data=@(Get-SuitePreview -ActionIds @($request.Ids)); $message='Preview only. No Windows settings changed.' }
-        'Optimize' { $report=Invoke-SuiteRun -ActionIds @($request.Ids) -StartupIds @($request.StartupIds) -AppIds @($request.AppIds) -Progress $progress }
+        'Preview' { $data=@(Get-SuitePreview -ActionIds @($request.Ids) -StartupIds @($request.StartupIds | Where-Object { $_ }) -AppIds @($request.AppIds | Where-Object { $_ })); $message='Preview only. No Windows settings changed.' }
+        'Optimize' { $report=Invoke-SuiteRun -ActionIds @($request.Ids) -StartupIds @($request.StartupIds | Where-Object { $_ }) -AppIds @($request.AppIds | Where-Object { $_ }) -Progress $progress }
         'Startup' { $data=@(Get-SuiteStartupItems); $message="$($data.Count) startup entries and third-party startup tasks found." }
         'DisableStartup' { $report=Invoke-SuiteStartupDisable -Ids @($request.Ids) }
         'Apps' { $data=@(Get-SuiteAppCatalog); $message="$($data.Count) optional consumer apps found." }
@@ -19,7 +22,13 @@ try {
         'History' { $data=@(Get-SuiteHistory); $message="$($data.Count) saved operations found." }
         'Undo' { $report=Invoke-SuiteUndo -Path $request.Path }
         'Repair' { $report=Invoke-SuiteRepair -Progress $progress }
-        'RestorePoint' { Checkpoint-Computer -Description 'Windows PC Toolkit' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop; $message='Windows restore point created.' }
+        'RestorePoint' {
+            $before=@(Get-ComputerRestorePoint -ErrorAction Stop | ForEach-Object SequenceNumber)
+            Checkpoint-Computer -Description 'Windows PC Toolkit' -RestorePointType MODIFY_SETTINGS -ErrorAction Stop -WarningAction Stop
+            $created=@(Get-ComputerRestorePoint -ErrorAction Stop | Where-Object { $_.SequenceNumber -notin $before -and $_.Description -eq 'Windows PC Toolkit' })
+            if (-not $created.Count) { throw 'Windows did not create a new toolkit restore point. Check System Protection and the restore-point frequency limit.' }
+            $message='Windows restore point created and verified.'
+        }
         'DnsInfo' { $data=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Status -eq 'Up' | Select-Object Name,ifIndex,InterfaceDescription); $message='Active physical adapters loaded.' }
         'Dns' {
             . (Resolve-SuitePath @('dns-encrypted-doh\DNS_Manager.ps1','Pc Privacy Guard\Optional DNS\DNS_Manager.ps1')) -Action Library -InterfaceIndex @($request.Ids | ForEach-Object { [int]$_ })
@@ -50,7 +59,16 @@ try {
     if ($report) { $status=$report.Status; $message=$report.Message }
     Save-SuiteJson $resultPath ([pscustomobject]@{Status=$status;Message=$message;Data=$data;Report=$report})
 } catch {
-    if ($report) { $report.Status='Failed'; $report.Message=$_.Exception.Message; Save-SuiteJson $report.Path $report }
-    Save-SuiteJson $resultPath ([pscustomobject]@{Status='Failed';Message=$_.Exception.Message;Data=$null;Report=$null})
-    throw
+    $failure=$_
+    if (Get-Command Write-SuiteDiagnostic -ErrorAction SilentlyContinue) { Write-SuiteDiagnostic 'Worker failure' $failure.Exception.Message 'Error' }
+    if ($report) {
+        $report.Status='Failed'; $report.Message=$failure.Exception.Message
+        try { Add-SuiteStep $report $request.Operation 'Failed' $failure.Exception.Message } catch { Write-Warning $_.Exception.Message }
+    }
+    $result=[pscustomobject]@{Status='Failed';Message=$failure.Exception.Message;Data=$null;Report=$report}
+    # Keep startup/import failures visible even when the shared module could not load.
+    $json=$result | ConvertTo-Json -Depth 16
+    if (Get-Command Assert-SuiteUnlinkedPath -ErrorAction SilentlyContinue) { Assert-SuiteUnlinkedPath $resultPath }
+    [IO.File]::WriteAllText($resultPath,$json,(New-Object Text.UTF8Encoding($false)))
+    throw $failure
 }
