@@ -58,7 +58,9 @@ try {
                 Check ($process.ExitCode -eq $expectedCode) "$relative propagates marker exit $expectedCode; actual $($process.ExitCode): $output"
                 Check (Test-Path -LiteralPath $marker) "$relative reaches only the harmless marker target"
                 $record=Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
-                Check ($record.Path -eq $targetPath) "$relative preserves the apostrophe/Unicode target path"
+                $actualPath=[IO.Path]::GetFullPath($record.Path)
+                $expectedPath=[IO.Path]::GetFullPath($targetPath)
+                Check ($actualPath -eq $expectedPath) "$relative preserves the exact target file; actual=$actualPath; expected=$expectedPath; raw actual=$($record.Path); raw expected=$targetPath"
                 $action=[regex]::Match($content,'-Action\s+(\w+)')
                 if ($action.Success) { Check ($record.Action -eq $action.Groups[1].Value) "$relative preserves its action argument" }
                 if ($content -match '-ExpectedUserSid') { Check ($record.ExpectedUserSid -eq $userSid) "$relative forwards the originating Windows identity" }
