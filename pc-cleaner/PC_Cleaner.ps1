@@ -1,7 +1,7 @@
 ﻿#requires -version 5.1
 <#
 .SYNOPSIS
-    PC Cleaner v1.1 - scan-first disk cleanup and registry care for Windows 10/11.
+    PC Cleaner v1.1.1 - scan-first disk cleanup and registry care for Windows 10/11.
 .DESCRIPTION
     Every category is labeled with what it is and why it is safe. Nothing is
     deleted without an explicit profile/pick and a confirmation. User data -
@@ -14,15 +14,31 @@
 #>
 param(
     [ValidateSet('Menu','Scan','SelfTest','Library')]
-    [string]$Action = 'Menu'
+    [string]$Action = 'Menu',
+    [switch]$DebugLog,
+    [string]$ExpectedUserSid
 )
 
 $ErrorActionPreference = 'Stop'
-$Script:Version = '1.1'
+if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) { throw 'Run Cleaner as an administrator for your own Windows account; a different account would clean and change the wrong user profile.' }
+$Script:Version = '1.1.1'
+$script:CleanerDebugEnabled = ($Action -ne 'Library' -and ($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'))
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
 $RegBackupRoot  = Join-Path $StateRoot 'RegistryBackups'
 $FileBackupRoot = Join-Path $StateRoot 'FileBackups'
+
+function Write-CleanerDiagnostic {
+    param([string]$Event,[string]$Message)
+    if (-not $script:CleanerDebugEnabled) { return }
+    try {
+        $folder=Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs'
+        [void][IO.Directory]::CreateDirectory($folder)
+        $log=Join-Path $folder 'Cleaner_debug.log'
+        if ((Test-Path -LiteralPath $log) -and (Get-Item -LiteralPath $log).Length -ge 1MB) { Move-Item -LiteralPath $log -Destination ($log+'.1') -Force }
+        Add-Content -LiteralPath $log -Encoding UTF8 -Value ("{0} v{1} {2}: {3}" -f (Get-Date).ToString('o'),$Script:Version,$Event,$Message)
+    } catch { Write-Warning ("Could not write cleaner debug log: "+$_.Exception.Message) }
+}
 
 # ============================================================================
 #  UI + BASIC HELPERS
@@ -42,6 +58,7 @@ function Write-Status {
         Step = @{ Tag='  [=>] '; Color='Cyan' }
     }
     $m = $map[$Type]
+    Write-CleanerDiagnostic $Type $Text
     Write-Host $m.Tag -ForegroundColor $m.Color -NoNewline
     Write-Host $Text -ForegroundColor $(if ($Type -eq 'Info') { 'Gray' } else { 'White' })
 }
@@ -75,15 +92,41 @@ $Script:ProtectedNames = @(
     'Preferences','Secure Preferences','Local State','Extension State','Extensions','WebCache',
     # user folders
     'Desktop','Documents','Pictures','Videos','Music','Favorites','Contacts','Saved Games',
-    'OneDrive','Dropbox','Google Drive'
+    'OneDrive','Dropbox','Google Drive',
+    '.ollama','.lmstudio','huggingface','torch','whisper','.llama.cpp'
 )
 
 function Test-IsProtectedPath {
     param([Parameter(Mandatory)][string]$Path)
+    try { $Path=[IO.Path]::GetFullPath($Path) } catch { return $true }
     foreach ($segment in ($Path -split '[\\/]')) {
         if ($Script:ProtectedNames -contains $segment) { return $true }
     }
     return $false
+}
+
+function Test-CleanPathWithoutLinks {
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $current=[IO.Path]::GetFullPath($Path)
+        while ($current) {
+            if ((Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+            $current=Split-Path $current -Parent
+        }
+        return $true
+    } catch { return $false }
+}
+
+function Get-CleanTreeFiles {
+    param([string]$Path,[switch]$Report)
+    if (-not (Test-CleanPathWithoutLinks $Path) -or (-not $Report -and (Test-IsProtectedPath $Path))) { return }
+    $stack=New-Object Collections.Stack; $stack.Push($Path)
+    while ($stack.Count) {
+        foreach ($item in Get-ChildItem -LiteralPath $stack.Pop() -Force -ErrorAction SilentlyContinue) {
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (-not $Report -and (Test-IsProtectedPath $item.FullName))) { continue }
+            if ($item.PSIsContainer) { $stack.Push($item.FullName) } else { $item }
+        }
+    }
 }
 
 function Assert-NotProtected {
@@ -203,8 +246,8 @@ function Get-CleanCategories {
             Risk='KEEP'; Profile='Report'; Kind='Report'; Paths=@("$L\CoreAIPlatform.00");
             Desc='Your searchable Recall screen history. Deleting this erases that history permanently.' }
         [pscustomobject]@{ Id='WindowsOld';  Section='System'; Label='Previous Windows installation (Windows.old)';
-            Risk='STRICT'; Profile='Strict'; Kind='Special'; Paths=@();
-            Desc='Left by a Windows upgrade. Removing frees many GB; rollback to the previous build becomes impossible.' }
+            Risk='KEEP'; Profile='Report'; Kind='Report'; Paths=@("$env:SystemDrive\Windows.old");
+            Desc='Previous Windows installation, kept for rollback. Use Windows Storage settings to review removal.' }
     )
 }
 
@@ -229,7 +272,7 @@ function Resolve-CategoryDirs {
     $out = @()
     foreach ($p in $Category.Paths) {
         if ($p -match '\*') {
-            $out += @(Get-Item -Path $p -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })
+            $out += @(Get-Item -Path ([WildcardPattern]::Escape($p).Replace('`*','*')) -Force -ErrorAction SilentlyContinue | Where-Object { $_.PSIsContainer })
         } elseif (Test-Path -LiteralPath $p -PathType Container -ErrorAction SilentlyContinue) {
             $out += Get-Item -LiteralPath $p -Force
         }
@@ -242,7 +285,7 @@ function Resolve-CategoryFiles {
     $out = @()
     foreach ($p in $Category.Paths) {
         if ($p -match '\*') {
-            $out += @(Get-ChildItem -Path $p -Force -File -ErrorAction SilentlyContinue)
+            $out += @(Get-ChildItem -Path ([WildcardPattern]::Escape($p).Replace('`*','*')) -Force -File -ErrorAction SilentlyContinue)
         } elseif (Test-Path -LiteralPath $p -PathType Leaf -ErrorAction SilentlyContinue) {
             $out += Get-Item -LiteralPath $p -Force
         }
@@ -256,17 +299,19 @@ function Measure-Category {
     switch ($Category.Kind) {
         'Children' {
             foreach ($dir in Resolve-CategoryDirs -Category $Category) {
-                $items = @(Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -ErrorAction SilentlyContinue)
+                $items = if ($Category.Id -in @('UserTemp','WindowsTemp')) { @(Get-DisposableTempFiles @($dir.FullName)) } else { @(Get-CleanTreeFiles $dir.FullName) }
                 $files += $items.Count
                 $bytes += [long](($items | Measure-Object -Property Length -Sum).Sum)
             }
         }
         'Files' {
-            foreach ($f in Resolve-CategoryFiles -Category $Category) { $files++; $bytes += $f.Length }
+            foreach ($f in Resolve-CategoryFiles -Category $Category) {
+                if ((Test-CleanPathWithoutLinks $f.FullName) -and -not (Test-IsProtectedPath $f.FullName)) { $files++; $bytes += $f.Length }
+            }
         }
         'Report' {
             foreach ($dir in Resolve-CategoryDirs -Category $Category) {
-                $items = @(Get-ChildItem -LiteralPath $dir.FullName -Recurse -File -Force -ErrorAction SilentlyContinue)
+                $items = @(Get-CleanTreeFiles $dir.FullName -Report)
                 $files += $items.Count
                 $bytes += [long](($items | Measure-Object -Property Length -Sum).Sum)
             }
@@ -276,23 +321,15 @@ function Measure-Category {
                 'DeliveryOptimization' {
                     $p = Join-Path $env:SystemRoot 'ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization'
                     if (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue) {
-                        $items = @(Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction SilentlyContinue)
+                        $items = @(Get-CleanTreeFiles $p)
                         $files += $items.Count
                         $bytes += [long](($items | Measure-Object -Property Length -Sum).Sum)
                     }
                 }
                 'BakFiles' {
                     $r = Get-BakCandidates
-                    $files += @($r.Deletable).Count
-                    foreach ($f in $r.Deletable) { $bytes += $f.Length }
-                }
-                'WindowsOld' {
-                    $p = Join-Path $env:SystemDrive 'Windows.old'
-                    if (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue) {
-                        $items = @(Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction SilentlyContinue)
-                        $files += $items.Count
-                        $bytes += [long](($items | Measure-Object -Property Length -Sum).Sum)
-                    }
+                    $files += @($r.Deletable).Count + @($r.Orphans).Count
+                    foreach ($f in @($r.Deletable)+@($r.Orphans)) { $bytes += $f.Length }
                 }
             }
         }
@@ -306,7 +343,7 @@ function Remove-ItemSafe {
     if (Test-IsProtectedPath -Path $Path) { return $false }
     try {
         $item=Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+        if (-not (Test-CleanPathWithoutLinks $item.FullName)) { return $false }
         if ($Directory) {
             $stack=New-Object Collections.Stack; $stack.Push($Path)
             while ($stack.Count) {
@@ -319,7 +356,7 @@ function Remove-ItemSafe {
         if ($Directory) { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop }
         else            { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop }
         return $true
-    } catch { return $false }
+    } catch { Write-CleanerDiagnostic 'RemovalFailure' ("$Path : "+$_.Exception.Message); return $false }
 }
 
 function Get-BakCandidates {
@@ -332,7 +369,7 @@ function Get-BakCandidates {
     $deletable = New-Object System.Collections.ArrayList
     $orphans   = New-Object System.Collections.ArrayList
     foreach ($root in $Roots) {
-        if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container -ErrorAction SilentlyContinue)) { continue }
+        if (-not $root -or -not (Test-Path -LiteralPath $root -PathType Container -ErrorAction SilentlyContinue) -or -not (Test-CleanPathWithoutLinks $root)) { continue }
         $stack = New-Object System.Collections.Stack
         $stack.Push([pscustomobject]@{ Path = $root; Depth = 0 })
         while ($stack.Count -gt 0) {
@@ -344,6 +381,7 @@ function Get-BakCandidates {
                 $stack.Push([pscustomobject]@{ Path = $d.FullName; Depth = $cur.Depth + 1 })
             }
             foreach ($f in @(Get-ChildItem -LiteralPath $cur.Path -File -Force -ErrorAction SilentlyContinue)) {
+                if (($f.Attributes -band [IO.FileAttributes]::ReparsePoint) -or (Test-IsProtectedPath $f.FullName)) { continue }
                 if ($exts -notcontains $f.Extension.ToLowerInvariant()) { continue }
                 $original = Join-Path $cur.Path ([IO.Path]::GetFileNameWithoutExtension($f.Name))
                 if (Test-Path -LiteralPath $original -PathType Leaf -ErrorAction SilentlyContinue) { [void]$deletable.Add($f) }
@@ -356,13 +394,16 @@ function Get-BakCandidates {
 
 function Invoke-CleanCategory {
     param($Category)
-    $result = [pscustomobject]@{ Id = $Category.Id; Label = $Category.Label; Removed = 0; Skipped = 0; Bytes = [long]0; Note = '' }
-    if ($Category.Profile -eq 'Report' -or $Category.Kind -eq 'Report') { $result.Note='Review only; kept all files.'; return $result }
+    $result = [pscustomobject]@{ Id = $Category.Id; Label = $Category.Label; Removed = 0; Skipped = 0; Bytes = [long]0; Note = ''; Status='Completed' }
+    if ($Category.Profile -eq 'Report' -or $Category.Kind -eq 'Report' -or $Category.Id -in @('WindowsOld','BakFiles','WUCache','RecallData','AiAppCaches','ModelStores')) { $result.Status='Skipped'; $result.Note='Review only; kept all files.'; return $result }
     switch ($Category.Kind) {
         'Children' {
             foreach ($dir in Resolve-CategoryDirs -Category $Category) {
+                if ((Test-IsProtectedPath $dir.FullName) -or -not (Test-CleanPathWithoutLinks $dir.FullName)) { $result.Skipped++; continue }
                 if ($Category.Id -in @('UserTemp','WindowsTemp')) {
                     foreach ($file in Get-DisposableTempFiles -Roots @($dir.FullName)) {
+                        $current=Get-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+                        if (-not $current -or $current.LastWriteTime -ge (Get-Date).AddDays(-7) -or $current.LastAccessTime -ge (Get-Date).AddDays(-7)) { $result.Skipped++; continue }
                         if (Remove-ItemSafe $file.FullName) { $result.Removed++; $result.Bytes+=$file.Length }
                         else { $result.Skipped++ }
                     }
@@ -371,7 +412,7 @@ function Invoke-CleanCategory {
                 foreach ($child in @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)) {
                     if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $result.Skipped++; continue }
                     $size = if ($child.PSIsContainer) {
-                        [long](@(Get-ChildItem -LiteralPath $child.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum)
+                        [long](@(Get-CleanTreeFiles $child.FullName | Measure-Object -Property Length -Sum).Sum)
                     } else { [long]$child.Length }
                     if (Remove-ItemSafe -Path $child.FullName -Directory:$child.PSIsContainer) {
                         $result.Removed++
@@ -393,28 +434,11 @@ function Invoke-CleanCategory {
                         try {
                             $before = Measure-Category -Category $Category
                             Delete-DeliveryOptimizationCache -Force -ErrorAction Stop
-                            $result.Removed = $before.Files; $result.Bytes = $before.Bytes
-                        } catch { $result.Note = $_.Exception.Message }
-                    } else { $result.Note = 'cmdlet not available on this build' }
-                }
-                'BakFiles' {
-                    $r = Get-BakCandidates
-                    foreach ($f in $r.Deletable) {
-                        if (Remove-ItemSafe -Path $f.FullName) { $result.Removed++; $result.Bytes += [long]$f.Length }
-                        else { $result.Skipped++ }
-                    }
-                    $result.Note = "$(@($r.Orphans).Count) backup file(s) kept (no original found)"
-                }
-                'WindowsOld' {
-                    $p = Join-Path $env:SystemDrive 'Windows.old'
-                    if (Test-Path -LiteralPath $p -ErrorAction SilentlyContinue) {
-                        Write-Status Info 'Taking ownership of Windows.old (this can take several minutes)...'
-                        & "$env:SystemRoot\System32\takeown.exe" /f $p /r /d y 2>&1 | Out-Null
-                        & "$env:SystemRoot\System32\icacls.exe" $p /grant '*S-1-5-32-544:(OI)(CI)F' /t /c 2>&1 | Out-Null
-                        $before = Measure-Category -Category $Category
-                        if (Remove-ItemSafe -Path $p -Directory) { $result.Removed = $before.Files; $result.Bytes = $before.Bytes }
-                        else { $result.Note = 'removal incomplete - some files are still protected' }
-                    }
+                            $after = Measure-Category -Category $Category
+                            $result.Removed = [math]::Max(0,$before.Files-$after.Files); $result.Bytes = [math]::Max(0,$before.Bytes-$after.Bytes)
+                            $result.Note = 'Measured cache reduction after Windows cleanup; pinned/in-use files may remain.'
+                        } catch { $result.Status='Failed'; $result.Note = $_.Exception.Message; Write-CleanerDiagnostic 'CleanupFailure' $result.Note }
+                    } else { $result.Status='Skipped'; $result.Note = 'cmdlet not available on this build' }
                 }
             }
         }
@@ -436,6 +460,8 @@ function Get-CommandTargetPath {
     } else {
         $m = [regex]::Match($c, '^(.*?\.exe)(\s|$)', 'IgnoreCase')
         if ($m.Success) { $c = $m.Groups[1].Value } else { $c = ($c -split '\s+')[0] }
+        # Unquoted paths with spaces have several CreateProcess candidates.
+        if ($c -match '\s' -or $CommandLine -match '^\s*[^"\s]+\.exe\s+[^-"/]*\\') { return $null }
     }
     if (-not [IO.Path]::IsPathRooted($c)) { return $null }
     return $c
@@ -447,7 +473,7 @@ function Get-DisposableTempFiles {
     foreach ($root in $Roots) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
         $rootItem=Get-Item -LiteralPath $root -Force -ErrorAction Stop
-        if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        if ((Test-IsProtectedPath $rootItem.FullName) -or -not (Test-CleanPathWithoutLinks $rootItem.FullName)) { continue }
         $stack=New-Object Collections.Stack; $stack.Push($rootItem.FullName)
         while ($stack.Count) {
             foreach ($item in Get-ChildItem -LiteralPath $stack.Pop() -Force -ErrorAction SilentlyContinue) {
@@ -494,7 +520,7 @@ function Get-RegistryIssues {
         try {
             $props = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
             foreach ($prop in $props.PSObject.Properties) {
-                if ($prop.Name -match '^PS') { continue }
+                if ($prop.Name -in @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) { continue }
                 $target = Get-CommandTargetPath ([string]$prop.Value)
                 if ($target -and -not (Test-Path -LiteralPath $target -ErrorAction SilentlyContinue)) {
                     [void]$issues.Add([pscustomobject]@{
@@ -532,7 +558,7 @@ function Get-RegistryIssues {
     try {
         $props = Get-ItemProperty -LiteralPath $mui -ErrorAction Stop
         foreach ($prop in $props.PSObject.Properties) {
-            if ($prop.Name -match '^PS') { continue }
+            if ($prop.Name -in @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) { continue }
             $pathPart = $prop.Name -replace '\.(FriendlyAppName|ApplicationCompany|NoRemove)$', ''
             if ($pathPart -notmatch '\\') { continue }
             $pathPart = [Environment]::ExpandEnvironmentVariables($pathPart)
@@ -593,15 +619,26 @@ function Invoke-RegistryCare {
     try {
         $run=New-SuiteRun 'RegistryCare'
         foreach ($issue in $selected) {
+            $start=$run.Registry.Count
             try {
-                $target=if ($issue.Category -eq 'Dead startup entries') { Get-CommandTargetPath $issue.Display } else { $issue.Display }
+                $target=$issue.Display
+                if ($issue.Category -eq 'Dead startup entries') {
+                    $current=Get-Item -LiteralPath $issue.Key -ErrorAction Stop
+                    $target=if ($current.GetValueNames() -contains $issue.Name) { Get-CommandTargetPath ([string]$current.GetValue($issue.Name,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)) } else { $null }
+                }
                 if ($issue.Kind -ne 'Value' -or $issue.Category -notin @('Dead startup entries','Stale MuiCache entries') -or -not (Test-SuiteMissingExecutable $target)) {
                     Add-SuiteStep $run $issue.Display 'Skipped' 'Review candidate retained. No registry key/app registration/shortcut removed.'
                     continue
                 }
                 Set-SuiteRegistry $run $issue.Key $issue.Name $null -Remove
                 Add-SuiteStep $run $issue.Name 'Applied' 'Dead value removed with exact typed-value backup.'
-            } catch { Add-SuiteStep $run $issue.Name 'Failed' $_.Exception.Message }
+            } catch {
+                $message=$_.Exception.Message
+                for ($index=$run.Registry.Count-1; $index -ge $start; $index--) {
+                    try { Undo-SuiteRegistryEntry $run.Registry[$index] } catch { $message+=' Rollback: '+$_.Exception.Message }
+                }
+                Add-SuiteStep $run $issue.Name 'Failed' $message
+            }
         }
         $run.Status=if (@($run.Steps | Where-Object Status -eq 'Failed').Count) { 'CompletedWithErrors' } else { 'Completed' }
         Save-SuiteJson $run.Path $run
@@ -621,10 +658,15 @@ function Restore-LatestRegistryBackup {
     if (-not (Test-Path -LiteralPath $manifestPath -ErrorAction SilentlyContinue)) { Write-Status Warn 'Latest backup has no manifest.'; return }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     Write-Status Info ("Restoring backup from {0} ({1} item(s))..." -f $latest.Name, @($manifest.Items).Count)
+    if (@($manifest.Items | Where-Object Type -ne 'File').Count) {
+        Write-Status Warn 'Legacy registry snapshots import whole keys and can replace changes made after backup.'
+        if ((Read-Host '  Import these legacy registry snapshots? (y/N)') -notmatch '^[Yy]$') { Write-Status Skip 'Legacy backup retained; nothing restored.'; return }
+    }
     $restored = 0
     foreach ($item in @($manifest.Items)) {
         if ($item.Type -eq 'File') {
             try {
+                if (Test-Path -LiteralPath $item.Path) { Write-Status Skip ("Existing file kept: "+$item.Path); continue }
                 $dest = Split-Path $item.Path -Parent
                 if (-not (Test-Path -LiteralPath $dest -ErrorAction SilentlyContinue)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
                 Copy-Item -LiteralPath $item.Backup -Destination $item.Path -Force -ErrorAction Stop
@@ -650,7 +692,7 @@ function Show-ScanLine {
     param($Category, $Info, [string]$Prefix = '')
     $tag = switch ($Category.Risk) {
         'SAFE'    { '[SAFE]   ' } 'CAREFUL' { '[CAREFUL]' }
-        'STRICT'  { '[STRICT] ' } 'REPORT'  { '[KEEP]   ' }
+        'STRICT'  { '[STRICT] ' } 'REPORT'  { '[KEEP]   ' } 'KEEP' { '[KEEP]   ' }
         default   { '[----]   ' }
     }
     $color = switch ($Category.Risk) { 'SAFE' { 'Green' } 'CAREFUL' { 'Yellow' } 'STRICT' { 'Red' } default { 'DarkCyan' } }
@@ -661,7 +703,7 @@ function Show-ScanLine {
 
 function Show-ScanReport {
     $cats = Get-CleanCategories
-    $rep  = Get-ReportCategories
+    $rep  = @(Get-ReportCategories) + @($cats | Where-Object Profile -eq 'Report')
     Write-Host ''
     Write-Status Step 'Scanning (read-only - nothing is deleted by a scan)...'
     $measured = @{}
@@ -708,12 +750,13 @@ function Get-FreeSpaceBytes {
 function Save-RunLog {
     param([string]$Name, $Results, [long]$FreeBefore, [long]$FreeAfter)
     Initialize-State
-    $path = Join-Path $LogRoot ("clean_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    $path = Join-Path $LogRoot ("clean_{0}_{1}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss'),[guid]::NewGuid().ToString('N'))
     $obj = [pscustomobject]@{
         Tool = 'PC Cleaner'; Version = $Script:Version; Profile = $Name
         Created = (Get-Date).ToString('o'); Computer = $env:COMPUTERNAME
         FreeBeforeBytes = $FreeBefore; FreeAfterBytes = $FreeAfter
         TotalRemovedBytes = [long](($Results | Measure-Object -Property Bytes -Sum).Sum)
+        Status = $(if (@($Results | Where-Object Status -eq 'Failed').Count) { 'CompletedWithErrors' } else { 'Completed' })
         Categories = @($Results)
     }
     ($obj | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $path -Encoding UTF8
@@ -735,7 +778,7 @@ function Invoke-Profile {
     foreach ($c in $cats) {
         $r = Invoke-CleanCategory -Category $c
         [void]$results.Add($r)
-        Write-Status OK ("{0}: removed {1} item(s), freed {2}{3}" -f $c.Label, $r.Removed, (Format-Size $r.Bytes),
+        Write-Status $(if ($r.Status -eq 'Failed') { 'Fail' } elseif ($r.Status -eq 'Skipped') { 'Skip' } else { 'OK' }) ("{0}: removed {1} item(s), freed {2}{3}" -f $c.Label, $r.Removed, (Format-Size $r.Bytes),
             $(if ($r.Skipped -gt 0) { " ($($r.Skipped) locked/in-use skipped)" } else { '' }))
         if ($r.Note) { Write-Status Info ("   {0}" -f $r.Note) }
     }
@@ -746,7 +789,7 @@ function Invoke-Profile {
     $totalSkipped = [int](($results | Measure-Object -Property Skipped -Sum).Sum)
     Write-Host ''
     Write-Host ("  ============================================================") -ForegroundColor DarkCyan
-    Write-Status OK ("{0} clean complete: {1} item(s) removed, {2} skipped, {3} freed." -f $Name, $totalRemoved, $totalSkipped, (Format-Size $totalBytes))
+    Write-Status $(if (@($results | Where-Object Status -eq 'Failed').Count) { 'Warn' } else { 'OK' }) ("{0} clean complete: {1} item(s) removed, {2} skipped, {3} freed. {4} category failure(s)." -f $Name, $totalRemoved, $totalSkipped, (Format-Size $totalBytes),@($results | Where-Object Status -eq 'Failed').Count)
     Write-Status Info ("Disk free: {0} -> {1}" -f (Format-Size $freeBefore), (Format-Size $freeAfter))
     Write-Status Info ("Log: {0}" -f $log)
 }
@@ -763,8 +806,12 @@ function Invoke-PickCategories {
     if ($pick -eq '0' -or [string]::IsNullOrWhiteSpace($pick)) { return }
     $selected = @()
     foreach ($part in ($pick -split ',')) {
-        if ($part -match '^\s*(\d+)\s*-\s*(\d+)\s*$') { foreach ($n in ([int]$Matches[1])..([int]$Matches[2])) { if ($n -ge 1 -and $n -le $cats.Count) { $selected += $cats[$n - 1] } } }
-        elseif ($part -match '^\s*(\d+)\s*$') { $idx = [int]$Matches[1]; if ($idx -ge 1 -and $idx -le $cats.Count) { $selected += $cats[$idx - 1] } }
+        $first=0; $last=0
+        if ($part -match '^\s*(\d+)\s*-\s*(\d+)\s*$') {
+            if ([int]::TryParse($Matches[1],[ref]$first) -and [int]::TryParse($Matches[2],[ref]$last) -and $first -ge 1 -and $first -le $cats.Count -and $last -ge 1 -and $last -le $cats.Count) {
+                foreach ($n in $first..$last) { $selected += $cats[$n-1] }
+            }
+        } elseif ([int]::TryParse($part.Trim(),[ref]$first) -and $first -ge 1 -and $first -le $cats.Count) { $selected += $cats[$first-1] }
     }
     $selected = @($selected | Where-Object { $_ } | Select-Object -Unique)
     if (@($selected).Count -eq 0) { Write-Status Skip 'Nothing valid selected.'; return }
@@ -776,11 +823,12 @@ function Invoke-PickCategories {
     foreach ($c in $selected) {
         $r = Invoke-CleanCategory -Category $c
         [void]$results.Add($r)
-        Write-Status OK ("{0}: removed {1} item(s), freed {2}{3}" -f $c.Label, $r.Removed, (Format-Size $r.Bytes),
+        Write-Status $(if ($r.Status -eq 'Failed') { 'Fail' } elseif ($r.Status -eq 'Skipped') { 'Skip' } else { 'OK' }) ("{0}: removed {1} item(s), freed {2}{3}" -f $c.Label, $r.Removed, (Format-Size $r.Bytes),
             $(if ($r.Skipped -gt 0) { " ($($r.Skipped) locked/in-use skipped)" } else { '' }))
+        if ($r.Note) { Write-Status Info $r.Note }
     }
     $log = Save-RunLog -Name 'Custom' -Results $results -FreeBefore $freeBefore -FreeAfter (Get-FreeSpaceBytes)
-    Write-Status OK ("Custom clean complete. Log: {0}" -f $log)
+    Write-Status $(if (@($results | Where-Object Status -eq 'Failed').Count) { 'Warn' } else { 'OK' }) ("Custom clean complete. Log: {0}" -f $log)
 }
 
 function Invoke-RecycleBin {
@@ -861,6 +909,7 @@ function Show-Menu {
 }
 
 if ($Action -eq 'Library') { return }
+Write-CleanerDiagnostic 'Startup' ("Action=$Action; StateRoot=$StateRoot; LogRoot=$LogRoot; Temp=$env:TEMP")
 switch ($Action) {
     'SelfTest' { Invoke-SelfTest }
     'Scan'     { Initialize-State; Show-ScanReport | Out-Null; exit 0 }
@@ -881,7 +930,7 @@ switch ($Action) {
                     '0' { exit 0 }
                     default { Write-Status Warn 'Invalid selection.' }
                 }
-            } catch { Write-Status Fail $_.Exception.Message }
+            } catch { Write-CleanerDiagnostic 'Exception' ($_.Exception.ToString()+"`n"+$_.ScriptStackTrace); Write-Status Fail $_.Exception.Message }
         }
     }
 }

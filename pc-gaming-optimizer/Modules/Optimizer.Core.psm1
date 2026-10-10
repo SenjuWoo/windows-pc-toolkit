@@ -2,15 +2,28 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:ToolkitVersion = '5.0'
+$script:ToolkitVersion = '5.0.1'
 $script:StateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\GamingOptimizer'
 $script:SnapshotRoot = Join-Path $script:StateRoot 'Snapshots'
 $script:LogRoot = Join-Path $script:StateRoot 'Logs'
+$script:DiagnosticPath = Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\GamingOptimizer.log'
+$script:DebugLog = $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'
+
+function Write-GamingDiagnostic {
+    param([string]$Kind,[string]$Message)
+    if (-not $script:DebugLog -and $Kind -notin @('FAIL','WARN')) { return }
+    try {
+        [void][IO.Directory]::CreateDirectory((Split-Path $script:DiagnosticPath -Parent))
+        if ((Test-Path -LiteralPath $script:DiagnosticPath) -and (Get-Item -LiteralPath $script:DiagnosticPath).Length -gt 2MB) { Move-Item -LiteralPath $script:DiagnosticPath -Destination ($script:DiagnosticPath+'.1') -Force }
+        [pscustomobject]@{Time=(Get-Date).ToString('o');Version=$script:ToolkitVersion;Kind=$Kind;Message=$Message} | ConvertTo-Json -Compress | Add-Content -LiteralPath $script:DiagnosticPath -Encoding UTF8
+    } catch { Write-Warning ('Could not write gaming diagnostic log: '+$_.Exception.Message) }
+}
 
 function Initialize-GamingToolkit {
     foreach ($path in @($script:StateRoot, $script:SnapshotRoot, $script:LogRoot)) {
         if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
     }
+    Write-GamingDiagnostic INFO ("Start; StateRoot=$script:StateRoot; SnapshotRoot=$script:SnapshotRoot; Debug=$script:DebugLog")
 }
 
 function Test-IsAdministrator {
@@ -28,6 +41,7 @@ function Write-ToolStatus {
     $color = switch ($Kind) { 'OK' {'Green'} 'INFO' {'Cyan'} 'WARN' {'Yellow'} 'FAIL' {'Red'} default {'White'} }
     $tag = switch ($Kind) { 'OK' {'[OK]'} 'INFO' {'[i]'} 'WARN' {'[!!]'} 'FAIL' {'[X]'} default {'[>>]'} }
     Write-Host ('  {0} {1}' -f $tag, $Message) -ForegroundColor $color
+    Write-GamingDiagnostic $Kind $Message
 }
 
 function Write-GamingHeader {
@@ -61,13 +75,15 @@ function Set-RegistryValueExact {
         'DWord' {'DWord'} 'MultiString' {'MultiString'} 'QWord' {'QWord'} default {'String'}
     }
     $typedValue = switch ($propertyType) {
-        'Binary' { [byte[]]@($Value) }
+        'Binary' { ,([byte[]]@($Value)) }
         'DWord' { [int]$Value }
         'QWord' { [long]$Value }
-        'MultiString' { [string[]]@($Value) }
+        'MultiString' { ,([string[]]@($Value)) }
         default { $Value }
     }
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $typedValue -PropertyType $propertyType -Force | Out-Null
+    $actual=Get-RegistryValueState $Path $Name
+    if (-not $actual.Exists -or $actual.Kind -ne $propertyType -or (ConvertTo-Json -InputObject $actual.Value -Compress) -cne (ConvertTo-Json -InputObject $typedValue -Compress)) { throw "Registry write verification failed: $Path\$Name" }
 }
 
 function Restore-RegistryValueState {
@@ -91,6 +107,7 @@ function Get-ActivePowerSchemeGuid {
 function Get-BcdOverrideStates {
     $names = @('useplatformclock','useplatformtick','disabledynamictick','tscsyncpolicy')
     $output = @(& "$env:SystemRoot\System32\bcdedit.exe" /enum '{current}' 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw "Boot configuration could not be read (exit $LASTEXITCODE); no changes are safe." }
     foreach ($name in $names) {
         $line = $output | Where-Object { $_ -match ("^\s*{0}\s+(.+)$" -f [regex]::Escape($name)) } | Select-Object -First 1
         if ($line -and $line -match ("^\s*{0}\s+(.+)$" -f [regex]::Escape($name))) {
@@ -105,6 +122,7 @@ function Get-NetworkAdapterStates {
         $rsc = Get-NetAdapterRsc -Name $adapter.Name -ErrorAction SilentlyContinue
         [pscustomobject]@{
             Name=$adapter.Name
+            InterfaceGuid=$adapter.InterfaceGuid.ToString()
             InterfaceDescription=$adapter.InterfaceDescription
             RssAvailable=[bool]($null -ne $rss)
             RssEnabled=if($rss){[bool]$rss.Enabled}else{$false}
@@ -155,13 +173,13 @@ function Get-GamingRegistryTargets {
     )
     $ifRoot='HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
     if(Test-Path -LiteralPath $ifRoot){
-        foreach($key in Get-ChildItem -LiteralPath $ifRoot -ErrorAction SilentlyContinue){
+        foreach($key in Get-ChildItem -LiteralPath $ifRoot -ErrorAction Stop){
             foreach($name in @('TcpAckFrequency','TCPNoDelay','TcpDelAckTicks')){$targets += @{Path=$key.PSPath;Name=$name}}
         }
     }
     $displayRoot='HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
     if(Test-Path -LiteralPath $displayRoot){
-        foreach($key in Get-ChildItem -LiteralPath $displayRoot -ErrorAction SilentlyContinue){
+        foreach($key in Get-ChildItem -LiteralPath $displayRoot -ErrorAction Stop){
             foreach($name in @('PowerMizerEnable','PowerMizerLevel','PowerMizerLevelAC','PerLevelGPUCacheSize','ShaderCacheSize','MSISupported','MessageNumberLimit')){$targets += @{Path=$key.PSPath;Name=$name}}
         }
     }
@@ -169,22 +187,23 @@ function Get-GamingRegistryTargets {
 }
 
 function New-GamingSnapshot {
-    param([string]$Reason='Manual change')
+    param([string]$Reason='Manual change',[object[]]$RegistryTargets=(Get-GamingRegistryTargets),[switch]$IncludeServices,[switch]$IncludeBcd,[switch]$IncludeNetwork)
     Initialize-GamingToolkit
     $stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
     $path = Join-Path $script:SnapshotRoot ("gaming_{0}.json" -f $stamp)
-    $registry = foreach ($t in Get-GamingRegistryTargets) { Get-RegistryValueState -Path $t.Path -Name $t.Name }
-    $services = foreach ($name in @('SysMain')) {
-        $svc = Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $name) -ErrorAction SilentlyContinue
+    $registry = foreach ($t in $RegistryTargets) { Get-RegistryValueState -Path $t.Path -Name $t.Name }
+    $services = if ($IncludeServices) { foreach ($name in @('SysMain')) {
+        $svc = Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $name) -ErrorAction Stop
         if ($svc) { [pscustomobject]@{Name=$name; StartMode=$svc.StartMode; State=$svc.State} }
-    }
+    } }
     $snapshot = [pscustomobject]@{
-        Schema=2; ToolkitVersion=$script:ToolkitVersion; Created=(Get-Date).ToString('o'); Reason=$Reason
-        PowerScheme=(Get-ActivePowerSchemeGuid); Registry=@($registry); Services=@($services)
-        BcdOverrides=@(Get-BcdOverrideStates); NetworkAdapters=@(Get-NetworkAdapterStates)
+        Schema=3; ToolkitVersion=$script:ToolkitVersion; Created=(Get-Date).ToString('o'); Reason=$Reason
+        Computer=$env:COMPUTERNAME; UserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        PowerScheme=$null; Registry=@($registry | Where-Object { $null -ne $_ }); Services=@($services | Where-Object { $null -ne $_ })
+        BcdOverrides=@(if($IncludeBcd){Get-BcdOverrideStates}); NetworkAdapters=@(if($IncludeNetwork){Get-NetworkAdapterStates})
     }
     $snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
-    Set-Content -LiteralPath (Join-Path $script:StateRoot 'latest_snapshot.txt') -Value $path -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $script:StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8
     Write-ToolStatus OK ("Safety snapshot saved: {0}" -f $path)
     return $path
 }
@@ -193,7 +212,8 @@ function Get-LatestGamingSnapshotPath {
     $pointer = Join-Path $script:StateRoot 'latest_snapshot.txt'
     if (Test-Path -LiteralPath $pointer) {
         $path = (Get-Content -LiteralPath $pointer -Raw).Trim()
-        if (Test-Path -LiteralPath $path) { return $path }
+        if ([IO.Path]::GetFullPath($path).StartsWith([IO.Path]::GetFullPath($script:SnapshotRoot).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $path -PathType Leaf)) { return $path }
+        Write-ToolStatus WARN 'Snapshot pointer is outside the local snapshot folder or missing; using the newest local snapshot instead.'
     }
     $latest = Get-ChildItem -LiteralPath $script:SnapshotRoot -Filter 'gaming_*.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($latest) { return $latest.FullName }
@@ -206,33 +226,68 @@ function Restore-LatestGamingSnapshot {
     $path = Get-LatestGamingSnapshotPath
     if (-not $path) { Write-ToolStatus WARN 'No optimizer snapshot exists yet.'; return }
     $snap = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    foreach ($state in @($snap.Registry)) { Restore-RegistryValueState -State $state }
+    if ($snap.Schema -notin @(1,2,3)) { throw 'Unsupported gaming snapshot schema.' }
+    if ($snap.Schema -eq 3 -and ($snap.Computer -ne $env:COMPUTERNAME -or $snap.UserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) { throw 'This gaming snapshot belongs to another computer or user.' }
+    if ($snap.Schema -lt 3) { Write-ToolStatus WARN 'Legacy snapshot has no recorded computer/user identity and may include unrelated settings. Restore only your own local backup.' }
+    $allowed=@(Get-GamingRegistryTargets)
+    foreach ($state in @($snap.Registry)) {
+        if (-not @($allowed | Where-Object { $_.Path -eq $state.Path -and $_.Name -eq $state.Name }).Count) { throw 'Gaming snapshot contains an unsupported registry target.' }
+        if ($state.Exists -isnot [bool] -or ($state.Exists -and $state.Kind -notin @('String','ExpandString','Binary','DWord','MultiString','QWord'))) { throw 'Gaming snapshot contains an invalid registry state.' }
+    }
+    foreach ($svcState in @($snap.Services)) {
+        if ($svcState.Name -ne 'SysMain' -or $svcState.StartMode -notin @('Auto','Manual','Disabled') -or $svcState.State -notin @('Running','Stopped')) { throw 'Gaming snapshot contains an unsupported service state.' }
+    }
+    if ($snap.PowerScheme -and $snap.PowerScheme -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { throw 'Gaming snapshot contains an invalid power scheme.' }
+    if ($snap.PSObject.Properties.Name -contains 'BcdOverrides') {
+        foreach ($state in @($snap.BcdOverrides)) { if ($state.Name -notin @('useplatformclock','useplatformtick','disabledynamictick','tscsyncpolicy') -or $state.Exists -isnot [bool]) { throw 'Gaming snapshot contains an unsupported boot state.' } }
+    }
+    Write-ToolStatus WARN 'Restoring a console snapshot can replace later manual changes. Review its path and scope before continuing.'
+    if ((Read-Host ("  Restore snapshot '$path'? (y/N)")) -notmatch '^[Yy]$') { return }
+    foreach ($state in @($snap.Registry)) {
+        Restore-RegistryValueState -State $state
+        $actual=Get-RegistryValueState $state.Path $state.Name
+        if ($actual.Exists -ne $state.Exists -or ($actual.Exists -and ($actual.Kind -ne $state.Kind -or (ConvertTo-Json -InputObject $actual.Value -Compress) -cne (ConvertTo-Json -InputObject $state.Value -Compress)))) { throw "Registry restore verification failed: $($state.Path)\$($state.Name)" }
+    }
     foreach ($svcState in @($snap.Services)) {
         $startType = switch ($svcState.StartMode) { 'Auto' {'Automatic'} 'Manual' {'Manual'} 'Disabled' {'Disabled'} default {$null} }
-        if ($startType) { Set-Service -Name $svcState.Name -StartupType $startType -ErrorAction SilentlyContinue }
-        if ($svcState.State -eq 'Running') { Start-Service -Name $svcState.Name -ErrorAction SilentlyContinue }
-        elseif ($svcState.State -eq 'Stopped') { Stop-Service -Name $svcState.Name -Force -ErrorAction SilentlyContinue }
+        if ($startType) { Set-Service -Name $svcState.Name -StartupType $startType -ErrorAction Stop }
+        if ($svcState.State -eq 'Running') { Start-Service -Name $svcState.Name -ErrorAction Stop }
+        elseif ($svcState.State -eq 'Stopped') { Stop-Service -Name $svcState.Name -Force -ErrorAction Stop }
+        $actualService=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $svcState.Name) -ErrorAction Stop
+        if ($actualService.State -ne $svcState.State -or $actualService.StartMode -ne $svcState.StartMode) { throw "Service restore verification failed: $($svcState.Name)" }
     }
     if ($snap.PSObject.Properties.Name -contains 'NetworkAdapters') {
         foreach ($adapterState in @($snap.NetworkAdapters)) {
-            $adapter = Get-NetAdapter -Name $adapterState.Name -ErrorAction SilentlyContinue
-            if (-not $adapter) { continue }
+            $adapter = if ($adapterState.PSObject.Properties.Name -contains 'InterfaceGuid') { Get-NetAdapter -ErrorAction Stop | Where-Object { $_.InterfaceGuid.ToString() -eq $adapterState.InterfaceGuid } | Select-Object -First 1 } else { Get-NetAdapter -Name $adapterState.Name -ErrorAction Stop }
+            if (-not $adapter) { throw "Original adapter not found: $($adapterState.Name)" }
             if ($adapterState.RssAvailable) {
-                if ($adapterState.RssEnabled) { Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction SilentlyContinue }
-                else { Disable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction SilentlyContinue }
+                if ($adapterState.RssEnabled) { Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction Stop }
+                else { Disable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction Stop }
+                if ([bool](Get-NetAdapterRss -Name $adapter.Name -ErrorAction Stop).Enabled -ne [bool]$adapterState.RssEnabled) { throw "RSS restore verification failed: $($adapter.Name)" }
             }
             if ($adapterState.RscAvailable) {
-                Set-NetAdapterRsc -Name $adapter.Name -IPv4Enabled ([bool]$adapterState.RscIPv4Enabled) -IPv6Enabled ([bool]$adapterState.RscIPv6Enabled) -NoRestart -ErrorAction SilentlyContinue
+                Set-NetAdapterRsc -Name $adapter.Name -IPv4Enabled ([bool]$adapterState.RscIPv4Enabled) -IPv6Enabled ([bool]$adapterState.RscIPv6Enabled) -NoRestart -ErrorAction Stop
+                $rsc=Get-NetAdapterRsc -Name $adapter.Name -ErrorAction Stop
+                if ([bool]$rsc.IPv4Enabled -ne [bool]$adapterState.RscIPv4Enabled -or [bool]$rsc.IPv6Enabled -ne [bool]$adapterState.RscIPv6Enabled) { throw "RSC restore verification failed: $($adapter.Name)" }
             }
         }
     }
     if ($snap.PSObject.Properties.Name -contains 'BcdOverrides') {
         foreach ($bcdState in @($snap.BcdOverrides)) {
+            $current=Get-BcdOverrideStates | Where-Object Name -eq $bcdState.Name
+            if (-not $current) { throw "Unknown BCD setting: $($bcdState.Name)" }
             if ($bcdState.Exists) { & "$env:SystemRoot\System32\bcdedit.exe" /set '{current}' $bcdState.Name $bcdState.Value 2>$null | Out-Null }
-            else { & "$env:SystemRoot\System32\bcdedit.exe" /deletevalue '{current}' $bcdState.Name 2>$null | Out-Null }
+            elseif ($current.Exists) { & "$env:SystemRoot\System32\bcdedit.exe" /deletevalue '{current}' $bcdState.Name 2>$null | Out-Null }
+            else { continue }
+            if ($LASTEXITCODE -ne 0) { throw "BCD restore failed for $($bcdState.Name) (exit $LASTEXITCODE)." }
+            $verified=Get-BcdOverrideStates | Where-Object Name -eq $bcdState.Name
+            if ($verified.Exists -ne $bcdState.Exists -or ($verified.Exists -and $verified.Value -cne $bcdState.Value)) { throw "BCD restore verification failed: $($bcdState.Name)" }
         }
     }
-    if ($snap.PowerScheme) { & "$env:SystemRoot\System32\powercfg.exe" /setactive $snap.PowerScheme | Out-Null }
+    if ($snap.PowerScheme) {
+        & "$env:SystemRoot\System32\powercfg.exe" /setactive $snap.PowerScheme | Out-Null
+        if ($LASTEXITCODE -ne 0 -or (Get-ActivePowerSchemeGuid) -ne $snap.PowerScheme) { throw 'Power scheme restore verification failed.' }
+    }
     Write-ToolStatus OK ("Restored exact state from {0}" -f $path)
     Write-ToolStatus INFO 'A sign-out or reboot may be needed for every setting to refresh.'
 }
@@ -253,7 +308,7 @@ function Invoke-HagsManager {
     Write-Host '  [1] Enable HAGS   [2] Disable HAGS   [0] Leave unchanged'
     $choice = Read-Host '  Selection'
     if ($choice -notin @('1','2')) { Write-ToolStatus INFO 'No change made.'; return }
-    New-GamingSnapshot -Reason 'HAGS change' | Out-Null
+    New-GamingSnapshot -Reason 'HAGS change' -RegistryTargets @(@{Path='HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers';Name='HwSchMode'}) | Out-Null
     $value = if ($choice -eq '1') { 2 } else { 1 }
     Set-RegistryValueExact -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value $value -Kind DWord
     Write-ToolStatus OK 'HAGS setting changed. Reboot required.'
@@ -263,7 +318,8 @@ function Invoke-HagsManager {
 function Invoke-SafeGamingProfile {
     param([switch]$DisableCaptures)
     Assert-Administrator
-    New-GamingSnapshot -Reason 'Safe gaming profile' | Out-Null
+    $names=@('AllowAutoGameMode','AutoGameModeEnabled'); if($DisableCaptures){$names+=@('GameDVR_Enabled','AppCaptureEnabled')}
+    New-GamingSnapshot -Reason 'Safe gaming profile' -RegistryTargets @(Get-GamingRegistryTargets | Where-Object { $_.Name -in $names }) | Out-Null
     Set-RegistryValueExact -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'AllowAutoGameMode' -Value 1 -Kind DWord
     Set-RegistryValueExact -Path 'HKCU:\Software\Microsoft\GameBar' -Name 'AutoGameModeEnabled' -Value 1 -Kind DWord
     if ($DisableCaptures) {
@@ -285,15 +341,27 @@ function Invoke-ShaderCacheCleanup {
         (Join-Path $env:LOCALAPPDATA 'AMD\GLCache'),
         (Join-Path $env:LOCALAPPDATA 'Intel\ShaderCache')
     )
-    $removed = 0; $bytes = [int64]0
+    $removed = 0; $skipped=0; $bytes = [int64]0
+    $localRoot=[IO.Path]::GetFullPath($env:LOCALAPPDATA).TrimEnd('\')
     foreach ($path in $paths) {
         if (-not (Test-Path -LiteralPath $path)) { continue }
-        foreach ($item in @(Get-ChildItem -LiteralPath $path -Force -Recurse -File -ErrorAction SilentlyContinue)) {
-            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
-            try { $length=$item.Length; Remove-Item -LiteralPath $item.FullName -Force -ErrorAction Stop; $bytes+=$length; $removed++ } catch { }
+        $ancestor=$path; $linked=$false
+        while ($ancestor -and $ancestor.Length -ge $localRoot.Length) {
+            if ((Get-Item -LiteralPath $ancestor -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) { $linked=$true; break }
+            $ancestor=Split-Path $ancestor -Parent
+        }
+        if ($linked) { $skipped++; continue }
+        $pending=New-Object 'Collections.Generic.Stack[string]'; $pending.Push($path)
+        while ($pending.Count) {
+            foreach ($item in @(Get-ChildItem -LiteralPath $pending.Pop() -Force -ErrorAction Stop)) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { $skipped++; continue }
+                if ($item.PSIsContainer) { $pending.Push($item.FullName); continue }
+                try { $length=$item.Length; Remove-Item -LiteralPath $item.FullName -Force -ErrorAction Stop; $bytes+=$length; $removed++ } catch { $skipped++ }
+            }
         }
     }
     Write-ToolStatus OK ("Removed {0} shader-cache files ({1:N1} MB)." -f $removed, ($bytes / 1MB))
+    if ($skipped) { Write-ToolStatus WARN "$skipped linked or locked cache items skipped." }
     Write-ToolStatus INFO 'The first launch of each game may stutter while shaders rebuild. Use this for troubleshooting, not routine maintenance.'
 }
 
@@ -315,7 +383,7 @@ function Show-GpuAudit {
 }
 
 function Get-PhysicalNetAdapters {
-    @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Disabled' })
+    @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -ne 'Disabled' })
 }
 
 function Show-NetworkAudit {
@@ -338,9 +406,10 @@ function Show-NetworkAudit {
 function Remove-RegistryValueIfPresent {
     param([string]$Path,[string]$Name)
     if (Test-Path -LiteralPath $Path) {
-        $key = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+        $key = Get-Item -LiteralPath $Path -ErrorAction Stop
         if ($key -and ($key.GetValueNames() -contains $Name)) {
-            Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+            Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop
+            if ((Get-RegistryValueState $Path $Name).Exists) { throw "Registry removal verification failed: $Path\$Name" }
             Write-ToolStatus OK ("Removed legacy override: {0}\{1}" -f $Path,$Name)
         }
     }
@@ -351,20 +420,17 @@ function Invoke-LegacyNetworkCleanup {
     Write-ToolStatus WARN 'This removes old suite latency tweaks, then returns core TCP settings to supported defaults. DNS is preserved.'
     $confirm = Read-Host '  Continue? (y/N)'
     if ($confirm -notmatch '^[Yy]$') { Write-ToolStatus INFO 'Cancelled.'; return }
-    New-GamingSnapshot -Reason 'Legacy network tweak cleanup' | Out-Null
+    New-GamingSnapshot -Reason 'Legacy network tweak cleanup' -RegistryTargets @(Get-GamingRegistryTargets | Where-Object { $_.Name -in @('NetworkThrottlingIndex','SystemResponsiveness','TcpAckFrequency','TCPNoDelay','TcpDelAckTicks') }) -IncludeNetwork | Out-Null
     $sysProfile='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
     Remove-RegistryValueIfPresent $sysProfile 'NetworkThrottlingIndex'
     Remove-RegistryValueIfPresent $sysProfile 'SystemResponsiveness'
     $ifRoot='HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
     if (Test-Path -LiteralPath $ifRoot) {
-        foreach ($key in Get-ChildItem -LiteralPath $ifRoot -ErrorAction SilentlyContinue) {
+        foreach ($key in Get-ChildItem -LiteralPath $ifRoot -ErrorAction Stop) {
             foreach ($name in @('TcpAckFrequency','TCPNoDelay','TcpDelAckTicks')) { Remove-RegistryValueIfPresent $key.PSPath $name }
         }
     }
-    foreach($adapter in Get-PhysicalNetAdapters){
-        Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction SilentlyContinue
-        Enable-NetAdapterRsc -Name $adapter.Name -Confirm:$false -ErrorAction SilentlyContinue
-    }
+    Enable-GamingSupportedOffloads
     Write-ToolStatus OK 'Legacy Nagle/QoS/MMCSS overrides removed; supported RSS/RSC offloads enabled where available.'
     Write-ToolStatus INFO 'TCP autotuning was preserved rather than guessed.'
     Write-ToolStatus INFO 'Adapter DNS addresses and DoH entries were not touched.'
@@ -381,11 +447,18 @@ function Show-StorageAudit {
 
 function Invoke-SafeRetrim {
     Assert-Administrator
-    $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -eq 'NTFS' })
-    foreach ($v in $volumes) {
-        try { Optimize-Volume -DriveLetter $v.DriveLetter -ReTrim -Verbose -ErrorAction Stop; Write-ToolStatus OK ("ReTrim completed on {0}:" -f $v.DriveLetter) }
-        catch { Write-ToolStatus WARN ("ReTrim skipped on {0}: {1}" -f $v.DriveLetter,$_.Exception.Message) }
+    $physical=@(Get-PhysicalDisk -ErrorAction Stop | Where-Object { $_.MediaType -eq 'SSD' -and -not [string]::IsNullOrWhiteSpace($_.SerialNumber) })
+    $count=0
+    foreach ($disk in Get-Disk -ErrorAction Stop) {
+        if ([string]::IsNullOrWhiteSpace($disk.SerialNumber)) { continue }
+        $matches=@($physical | Where-Object { $_.SerialNumber.Trim() -eq $disk.SerialNumber.Trim() })
+        if ($matches.Count -ne 1) { continue }
+        foreach ($v in @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Get-Volume -ErrorAction Stop | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_.FileSystem -in @('NTFS','ReFS') })) {
+            Optimize-Volume -DriveLetter $v.DriveLetter -ReTrim -Verbose -ErrorAction Stop
+            $count++; Write-ToolStatus OK ("ReTrim completed on {0}:" -f $v.DriveLetter)
+        }
     }
+    Write-ToolStatus INFO "$count confirmed SSD volumes processed; HDD and unknown media preserved."
 }
 
 function Show-MemoryAudit {
@@ -400,9 +473,8 @@ function Show-MemoryAudit {
 function Show-TimerAudit {
     Write-Host ''
     Write-Host '  TIMER / BOOT CONFIG AUDIT' -ForegroundColor Cyan
-    $bcd = & "$env:SystemRoot\System32\bcdedit.exe" /enum '{current}' 2>$null
-    $interesting = $bcd | Where-Object { $_ -match 'useplatformclock|useplatformtick|disabledynamictick|tscsyncpolicy' }
-    if ($interesting) { $interesting | ForEach-Object { Write-Host ('  ' + $_) -ForegroundColor Yellow } }
+    $interesting = @(Get-BcdOverrideStates | Where-Object Exists)
+    if ($interesting) { $interesting | ForEach-Object { Write-Host ('  {0}: {1}' -f $_.Name,$_.Value) -ForegroundColor Yellow } }
     else { Write-ToolStatus OK 'No legacy timer overrides were found in the current boot entry.' }
     try {
         $timer = Get-CimInstance Win32_PerfFormattedData_PerfOS_System -ErrorAction Stop
@@ -416,10 +488,8 @@ function Invoke-LegacyTimerCleanup {
     Write-ToolStatus WARN 'This deletes old BCD timer overrides and restores Windows automatic timer selection.'
     $confirm=Read-Host '  Continue? (y/N)'
     if ($confirm -notmatch '^[Yy]$') { return }
-    New-GamingSnapshot -Reason 'Legacy timer override cleanup' | Out-Null
-    foreach ($name in @('useplatformclock','useplatformtick','disabledynamictick','tscsyncpolicy')) {
-        & "$env:SystemRoot\System32\bcdedit.exe" /deletevalue '{current}' $name 2>$null | Out-Null
-    }
+    New-GamingSnapshot -Reason 'Legacy timer override cleanup' -RegistryTargets @() -IncludeBcd | Out-Null
+    Remove-GamingBcdOverrides
     Write-ToolStatus OK 'Legacy BCD timer overrides removed. Reboot required.'
 }
 
@@ -442,7 +512,7 @@ function Invoke-InputProfile {
     Assert-Administrator
     $choice=Read-Host '  Disable Windows mouse acceleration for 1:1 pointer movement? (y/N)'
     if ($choice -notmatch '^[Yy]$') { Write-ToolStatus INFO 'No change made.'; return }
-    New-GamingSnapshot -Reason 'Mouse acceleration change' | Out-Null
+    New-GamingSnapshot -Reason 'Mouse acceleration change' -RegistryTargets @(Get-GamingRegistryTargets | Where-Object { $_.Name -in @('MouseSpeed','MouseThreshold1','MouseThreshold2') }) | Out-Null
     Set-RegistryValueExact -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed' -Value '0' -Kind String
     Set-RegistryValueExact -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0' -Kind String
     Set-RegistryValueExact -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0' -Kind String
@@ -515,7 +585,7 @@ function Invoke-GameBooster {
     } catch { Write-ToolStatus FAIL $_.Exception.Message }
     finally {
         if ($p -and $null -ne $old) { try { if (-not $p.HasExited) { $p.PriorityClass=$old } } catch { Write-ToolStatus WARN 'The game priority could not be restored.' } }
-        Disable-StayAwake
+        try { Disable-StayAwake } catch { Write-ToolStatus WARN ('Stay-awake release failed: '+$_.Exception.Message) }
     }
 }
 
@@ -536,9 +606,9 @@ function Invoke-LegacyOptimizerRepair {
     Write-ToolStatus WARN 'This removes unsupported tweaks left by v3.x: MMCSS/network overrides, NTFS/cache overrides, storage LPM overrides, and BCD timer flags.'
     $confirm=Read-Host '  Create a snapshot and clean them? (y/N)'
     if ($confirm -notmatch '^[Yy]$') { return }
-    New-GamingSnapshot -Reason 'Repair v3.x legacy tweaks' | Out-Null
-    foreach($target in Get-GamingRegistryTargets){
-        if($target.Name -in @('AllowAutoGameMode','AutoGameModeEnabled','GameDVR_Enabled','AppCaptureEnabled','HwSchMode','MouseSpeed','MouseThreshold1','MouseThreshold2')){continue}
+    $targets=@(Get-GamingRegistryTargets | Where-Object { $_.Name -notin @('AllowAutoGameMode','AutoGameModeEnabled','GameDVR_Enabled','AppCaptureEnabled','HwSchMode','MouseSpeed','MouseThreshold1','MouseThreshold2') })
+    New-GamingSnapshot -Reason 'Repair v3.x legacy tweaks' -RegistryTargets $targets -IncludeServices -IncludeNetwork -IncludeBcd | Out-Null
+    foreach($target in $targets){
         Remove-RegistryValueIfPresent $target.Path $target.Name
     }
     $games='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'
@@ -548,14 +618,33 @@ function Invoke-LegacyOptimizerRepair {
     Set-RegistryValueExact $games 'SFIO Priority' 'Normal' String
     Set-RegistryValueExact $games 'Background Only' 'True' String
     Remove-RegistryValueIfPresent $games 'Clock Rate'
-    foreach($adapter in Get-PhysicalNetAdapters){
-        Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction SilentlyContinue
-        Enable-NetAdapterRsc -Name $adapter.Name -Confirm:$false -ErrorAction SilentlyContinue
-    }
-    if(Get-Service -Name SysMain -ErrorAction SilentlyContinue){Set-Service -Name SysMain -StartupType Automatic -ErrorAction SilentlyContinue;Start-Service -Name SysMain -ErrorAction SilentlyContinue}
-    foreach ($name in @('useplatformclock','useplatformtick','disabledynamictick','tscsyncpolicy')) { & "$env:SystemRoot\System32\bcdedit.exe" /deletevalue '{current}' $name 2>$null | Out-Null }
+    Enable-GamingSupportedOffloads
+    if(Get-Service -Name SysMain -ErrorAction SilentlyContinue){Set-Service -Name SysMain -StartupType Automatic -ErrorAction Stop;Start-Service -Name SysMain -ErrorAction Stop}
+    Remove-GamingBcdOverrides
     Write-ToolStatus OK 'Legacy optimizer overrides removed. DNS, GPU drivers, active power plan, and TCP autotuning were preserved.'
     Write-ToolStatus INFO 'Reboot recommended.'
+}
+
+function Enable-GamingSupportedOffloads {
+    foreach ($adapter in Get-NetworkAdapterStates) {
+        if ($adapter.RssAvailable) {
+            Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+            if (-not (Get-NetAdapterRss -Name $adapter.Name -ErrorAction Stop).Enabled) { throw "RSS enable verification failed: $($adapter.Name)" }
+        }
+        if ($adapter.RscAvailable) {
+            Enable-NetAdapterRsc -Name $adapter.Name -Confirm:$false -ErrorAction Stop
+            $rsc=Get-NetAdapterRsc -Name $adapter.Name -ErrorAction Stop
+            if (-not $rsc.IPv4Enabled -or -not $rsc.IPv6Enabled) { throw "RSC enable verification failed: $($adapter.Name)" }
+        }
+    }
+}
+
+function Remove-GamingBcdOverrides {
+    foreach ($state in @(Get-BcdOverrideStates | Where-Object Exists)) {
+        & "$env:SystemRoot\System32\bcdedit.exe" /deletevalue '{current}' $state.Name 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "BCD removal failed for $($state.Name) (exit $LASTEXITCODE)." }
+    }
+    if (@(Get-BcdOverrideStates | Where-Object Exists).Count) { throw 'BCD cleanup verification failed.' }
 }
 
 function Resolve-SuiteToolPath {

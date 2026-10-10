@@ -1,5 +1,16 @@
 # Changelog
 
+## Toolkit 3.0.1 (2026-10-10, source audit)
+
+- Audited all components, wrappers, shared modules, dashboard/worker, recovery, tests, launchers, CI and documentation before further feature expansion. Detailed findings: [audit](docs/AUDIT_2026-10-10.md).
+- Cleaner 1.1.1: make Windows.old truly report-only; prevent cleanup through ancestor junctions; align Temp scans with aged-file deletion; preserve replacements during registry/legacy recovery; report failed cache commands and retain unique logs.
+- DNS 2.2.1: correct Quad9 secondary IPv6 to `2620:fe::9`; require typed DoH APIs; preflight address families and restore modes; verify writes, removals and DHCP reset with rollback on failure.
+- Privacy 2.1.1: save the identity required by undo; verify snapshot inventories and writes; preserve typed arrays and delayed service startup; surface denied writes and require confirmation for legacy identity-less backups.
+- Fixer 7.2.1 and Gaming 5.0.1: repair summary exit crash; retain native command verdicts; stop false-success repair/undo paths; narrow Store restore to the current user; scope and validate recovery snapshots; protect shader paths and preserve NTP configuration.
+- Dashboard/core: preview reviewed selections; accept reviewed-only runs; lock profile controls while busy; retain worker startup/partial failure results; compare registry strings exactly; reject empty undo and linked state paths; use literal scheduled-task objects; verify stored AppX file hashes before reinstall.
+- Launchers: replace service-dependent elevation checks, quoted-path interpolation and timed UAC flags with principal checks and waiting on the child process; propagate exit codes.
+- Add native failure-path suites to CI in both folder layouts. Add bounded optional debug diagnostics under `%LOCALAPPDATA%\WindowsPCToolkit\Logs`. No new optimizer/debloat features or dependencies.
+
 ## Toolkit 3.0.0 (2026-10-01)
 
 - New native WPF dashboard: Optimize, Startup/tasks, App debloat, Encrypted DNS, Recovery/reports and Repair/tools. One-click ten-action recommended profile, nine optional choices and reviewed app/startup selections in one journal.
@@ -127,7 +138,7 @@ Major safety rewrite of every tool. First release with the modular Gaming Optimi
 
 ## Encrypted DNS Manager 2.1
 
-- Corrected Quad9 secondary IPv6 to the official secure-profile address `2620:fe::fe:9`; the previous value belonged to a different Quad9 service family.
+- Historical change introduced the incorrect Quad9 secondary IPv6 `2620:fe::fe:9`. The official Secure address is `2620:fe::9`; corrected in 3.0.1.
 - Replaced the mixed Quad9/Mullvad adapter profile with one provider at a time.
 - Added official Quad9 and all currently published Mullvad profiles.
 - Every IPv4/IPv6 address is registered with its matching HTTPS DoH template.

@@ -60,7 +60,7 @@ jobs:
       - name: Real registry, filesystem, worker and WPF regression checks
         shell: powershell
         run: |
-          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_All.ps1
           if ($LASTEXITCODE -ne 0) { throw "Toolkit regression checks failed." }
 
       - name: Regression checks in the installed friendly folder layout
@@ -76,10 +76,10 @@ jobs:
           foreach ($folder in $layout.Keys) {
             Copy-Item -LiteralPath (Join-Path $PWD $folder) -Destination (Join-Path $fixture $layout[$folder]) -Recurse
           }
-          foreach ($file in @('Toolkit.ps1','Toolkit.Worker.ps1','Toolkit.Run.ps1','Toolkit.xaml')) {
+          foreach ($file in @('Toolkit.ps1','Toolkit.Worker.ps1','Toolkit.Run.ps1','Toolkit.xaml','START_TOOLKIT.bat')) {
             Copy-Item -LiteralPath (Join-Path $PWD $file) -Destination $fixture
           }
-          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $fixture 'tests\Test_Toolkit.ps1')
+          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $fixture 'tests\Test_All.ps1')
           if ($LASTEXITCODE -ne 0) { throw "Friendly-layout regression checks failed." }
 
   data:

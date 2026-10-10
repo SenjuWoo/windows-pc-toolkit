@@ -1,7 +1,9 @@
 #requires -version 5.1
-param([string[]]$ActionIds,[switch]$Preview)
+param([string[]]$ActionIds,[switch]$Preview,[switch]$DebugLog)
 $ErrorActionPreference='Stop'
+if ($DebugLog) { $env:WINDOWS_PC_TOOLKIT_DEBUG='1' }
 Import-Module (Join-Path $PSScriptRoot 'Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
+Write-SuiteDiagnostic 'CLI startup' "DataRoot=$(Get-SuiteDataRoot); Preview=$Preview; Debug=$($env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1')"
 if ($Preview) { Get-SuitePreview -ActionIds $ActionIds | Format-Table Action,Category,Details -Wrap; exit 0 }
 if ($null -eq $ActionIds) { $ActionIds=@(Get-SuiteActionCatalog | Where-Object Default | ForEach-Object Id) }
 $apps=@()

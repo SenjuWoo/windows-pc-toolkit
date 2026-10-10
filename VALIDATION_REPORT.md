@@ -1,11 +1,11 @@
 # Validation report
 
-Windows PC Toolkit 3.0.0, local Windows 11 validation on October 1, 2026.
+Windows PC Toolkit 3.0.1, local Windows 11 audit validation on October 10, 2026. [Whole-project findings](docs/AUDIT_2026-10-10.md).
 
 ## Observed results
 
-- **114 regression and real-boundary checks passed** in Windows PowerShell 5.1, STA.
-- **37 PowerShell files parsed**, and launcher/DoH/safety checks passed in `Validate_All.ps1`.
+- **407 regression/boundary assertions passed locally** in Windows PowerShell 5.1, STA: base 116, Suite 24, Cleaner 53, DNS/privacy 41, repair/gaming 49, launchers 124. Administrative CI tokens omit 12 fixture-only principal-gate assertions, so the same suites report 395 assertions there.
+- **43 PowerShell files parsed**, and launcher/DoH/safety checks passed in `Validate_All.ps1`.
 - Native WPF loaded **55 controls and 19 optimization choices** from a freshly copied package in a path containing spaces, an apostrophe and non-English text.
 - Actual WPF Preview button → Start-Job worker → DispatcherTimer → result text/control refresh completed.
 - Actual repair button/worker/timer completed native-process success, failure and restart-required scenarios; a disposable console executable replaced DISM/SFC. The real Windows stay-awake API enabled and released its system-required flag.
@@ -15,6 +15,8 @@ Windows PC Toolkit 3.0.0, local Windows 11 validation on October 1, 2026.
 - Read-only native Windows probes loaded OS/hardware, essential services, startup/task and optional-AppX inventories. A redirected DNS snapshot captured schema 4 state without changing adapter configuration.
 
 ## Tested boundaries
+
+The added suites cover typed empty/single-item arrays and signed values, case-only conflicts, reviewed-only WPF optimization, linked state/cleanup/package paths, stale registry commands, AppX hash tampering, Recall post-reboot undo, restore-point no-op detection, startup/import failures, false-success console paths, service/boot/network rollback failures and originating-account guards. All 12 launchers execute actual CMD/PowerShell entrypoints with harmless target markers, exit 0/7 and Unicode/apostrophe/bracket/exclamation paths. A nonadministrative host substitutes only each fixture's principal gate; interactive UAC is not exercised.
 
 Real disposable HKCU values and serialized journals cover String, ExpandString, Binary, MultiString, QWord, absent values and UTF-8 text. Exact undo, failed backup before mutation, intervening-user conflicts, repeated undo, interrupted pending writes, combined startup/profile journals and rollback after a partial registry action are exercised.
 
@@ -36,7 +38,7 @@ Published releases attach `release-provenance.json` with their exact commit, CI 
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_Toolkit.ps1
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_All.ps1
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Toolkit.ps1 -RenderPreview .\docs\images\dashboard.png
 ```
 

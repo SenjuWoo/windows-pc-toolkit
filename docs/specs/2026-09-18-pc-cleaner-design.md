@@ -1,5 +1,7 @@
 # PC Cleaner v1.0.0 — design spec (2026-09-18)
 
+Historical proposal, not the current implementation contract. Use the [current cleaner README](../../pc-cleaner/README.md) and [2026-10-10 audit](../audit-cleaner.md) for behavior and limits. Windows.old, backups, Recall and update downloads are report-only in the current tool.
+
 ## Goal
 
 A fifth toolkit tool that beats CCleaner (adware), BleachBit (unclear labels, no registry cleaner, thin Windows coverage) and Razer Cortex (bloat) at their own game: **scan-first, plainly labeled, honest disk cleanup + registry care** that never touches user data.
