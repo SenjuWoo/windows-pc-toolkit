@@ -4,7 +4,7 @@ Windows PC Toolkit 3.0.1, local Windows 11 audit validation on October 10, 2026.
 
 ## Observed results
 
-- **407 regression/boundary assertions passed locally** in Windows PowerShell 5.1, STA: base 116, Suite 24, Cleaner 53, DNS/privacy 41, repair/gaming 49, launchers 124. Administrative CI tokens omit 12 fixture-only principal-gate assertions, so the same suites report 395 assertions there.
+- **408 regression/boundary assertions passed locally** in Windows PowerShell 5.1, STA: base 116, Suite 24, Cleaner 53, DNS/privacy 41, repair/gaming 49, launchers 125. Administrative CI tokens omit 12 fixture-only principal-gate assertions, so the same suites report 396 assertions there.
 - **43 PowerShell files parsed**, and launcher/DoH/safety checks passed in `Validate_All.ps1`.
 - Native WPF loaded **55 controls and 19 optimization choices** from a freshly copied package in a path containing spaces, an apostrophe and non-English text.
 - Actual WPF Preview button → Start-Job worker → DispatcherTimer → result text/control refresh completed.

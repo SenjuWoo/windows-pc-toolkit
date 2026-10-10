@@ -8,7 +8,13 @@ function Check([bool]$Condition,[string]$Message) { if (-not $Condition) { throw
 $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $admin=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$launchers=@(Get-ChildItem -LiteralPath $root -Filter '*.bat' -Recurse -File)
+function Get-AuditLaunchers([string]$Directory) {
+    Get-ChildItem -LiteralPath $Directory -Filter '*.bat' -Recurse -File | Where-Object {
+        $relative=$_.FullName.Substring($Directory.TrimEnd('\').Length+1)
+        $relative -notmatch '^(?:_github_publish|\.git|\.artifacts)[\\/]'
+    }
+}
+$launchers=@(Get-AuditLaunchers $root)
 Check ($launchers.Count -eq 12) 'All 12 batch launchers are covered'
 [void][IO.Directory]::CreateDirectory($fixture)
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'Local\Temp'))
@@ -19,6 +25,13 @@ $ErrorActionPreference='Stop'
 exit ([int]$env:TOOLKIT_AUDIT_EXIT)
 '@
 try {
+    foreach ($folder in @('_github_publish','.git','.artifacts')) {
+        $decoy=Join-Path $fixture ($folder+'\old.bat')
+        [void][IO.Directory]::CreateDirectory((Split-Path $decoy -Parent))
+        [IO.File]::WriteAllText($decoy,'@exit /b 99')
+    }
+    [IO.File]::WriteAllText((Join-Path $fixture 'START_TOOLKIT.bat'),'@exit /b 99')
+    Check (@(Get-AuditLaunchers $fixture).Count -eq 1) 'Owned launcher inventory excludes source, packaging and backup staging trees'
     foreach ($launcher in $launchers) {
         $relative=$launcher.FullName.Substring($root.TrimEnd('\').Length).TrimStart('\')
         $destination=Join-Path $fixture $relative
