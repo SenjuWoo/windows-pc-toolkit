@@ -1,6 +1,6 @@
 # Changelog
 
-## Toolkit 3.0.1 (2026-10-10, source audit)
+## Toolkit 3.0.1 (2026-10-10)
 
 - Audited all components, wrappers, shared modules, dashboard/worker, recovery, tests, launchers, CI and documentation before further feature expansion. Detailed findings: [audit](docs/AUDIT_2026-10-10.md).
 - Cleaner 1.1.1: make Windows.old truly report-only; prevent cleanup through ancestor junctions; align Temp scans with aged-file deletion; preserve replacements during registry/legacy recovery; report failed cache commands and retain unique logs.
