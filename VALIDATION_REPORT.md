@@ -36,6 +36,8 @@ The CI workflow runs parser/PSScriptAnalyzer gates, static toolkit validation, t
 
 Published releases attach `release-provenance.json` with their exact commit, CI links, archive size and SHA-256. Packaging checks compare every extracted file with that commit's Git blob. Uploaded assets are downloaded again and compared byte-for-byte by SHA-256.
 
+From the matching GitHub source checkout (tests and validators are not in the portable release ZIP):
+
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_All.ps1

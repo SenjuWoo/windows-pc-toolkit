@@ -9,6 +9,7 @@ $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.Wi
 $admin=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 $userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 function Get-AuditLaunchers([string]$Directory) {
+    $Directory=[IO.Path]::GetFullPath($Directory).TrimEnd('\')
     Get-ChildItem -LiteralPath $Directory -Filter '*.bat' -Recurse -File | Where-Object {
         $relative=$_.FullName.Substring($Directory.TrimEnd('\').Length+1)
         $relative -notmatch '^(?:_github_publish|\.git|\.artifacts)[\\/]'

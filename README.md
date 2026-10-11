@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-**[Download v3.0.0](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.0/Windows-PC-Toolkit-3.0.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.0)
+**[Download v3.0.1](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.1/Windows-PC-Toolkit-3.0.1.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.1)
 
-**Current source: 3.0.1 correctness audit.** This fixes cleanup, DNS, privacy recovery, repair reporting and launcher defects found in 3.0.0. See the [whole-project audit](docs/AUDIT_2026-10-10.md). The public download above is the older release; source fixes are not present in that ZIP.
+**3.0.1 correctness audit.** This fixes cleanup, DNS, privacy recovery, repair reporting and launcher defects found in 3.0.0. See the [whole-project audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md). This update repairs existing features before further expansion.
 
 ![Toolkit dashboard](docs/images/dashboard.png)
 
@@ -14,7 +14,7 @@ Rendered from the actual WPF dashboard with initial selections. Hardware and res
 
 ## Start here
 
-Download the **[complete v3.0.0 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.0/Windows-PC-Toolkit-3.0.0.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools now depend on the complete bundle. Older releases do not contain this dashboard.
+Download the **[complete v3.0.1 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.1/Windows-PC-Toolkit-3.0.1.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
 
 For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
@@ -106,9 +106,9 @@ Windows 11 is the main target. General tools also support Windows 10; Windows 11
 ```powershell
 # Read-only plan
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Toolkit.Run.ps1 -Preview
-# Static checks
+# From the matching GitHub source checkout: static checks
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validate_All.ps1
-# Disposable registry/filesystem, actual WPF, simulated failures
+# Source checkout: disposable registry/filesystem, actual WPF, simulated failures
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Test_All.ps1
 ```
 

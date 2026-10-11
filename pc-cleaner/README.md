@@ -32,4 +32,4 @@ Logs: `%ProgramData%\WindowsPCToolkit\Cleaner\Logs`. New registry recovery: `Win
 
 Debug logging is off by default. `-DebugLog` or `WINDOWS_PC_TOOLKIT_DEBUG=1` records the version, resolved paths, state changes and failures in `%LOCALAPPDATA%\WindowsPCToolkit\Logs\Cleaner_debug.log`, rotating at 1 MiB. Importing the cleaner as a library stays quiet. Run reports use unique names so rapid repeated runs keep their own evidence.
 
-Audit regression checks: `powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ..\tests\Test_AuditCleaner.ps1`.
+Audit regression checks, from the matching source checkout only: `powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File ..\tests\Test_AuditCleaner.ps1`.
