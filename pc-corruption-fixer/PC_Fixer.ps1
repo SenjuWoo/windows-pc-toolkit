@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    PC Corruption Fixer v7.2.1 - Advanced system repair and diagnostics toolkit.
+    PC Corruption Fixer v7.2.2 - Advanced system repair and diagnostics toolkit.
 .DESCRIPTION
     Repairs corrupted system files, fixes Windows Update safely, clears caches,
     resets networking, deep-cleans components, checks disk health, manages
@@ -93,7 +93,7 @@ $ProgressPreference = 'SilentlyContinue'
 #  CONFIGURATION
 # ============================================================================
 
-$Script:Version    = '7.2.1'
+$Script:Version    = '7.2.2'
 $Script:DebugLog   = $DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'
 $Script:LogDir     = Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\PCFixer'
 $Script:LogName    = "PC_Fixer_Log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
@@ -398,6 +398,36 @@ function Get-Elapsed {
         return "$($ts.Minutes)m $($ts.Seconds)s"
     }
     return "$($ts.TotalSeconds.ToString('F1'))s"
+}
+
+function Assert-FixerUnlinkedPath {
+    param([Parameter(Mandatory)][string]$Path)
+    $current=[IO.Path]::GetFullPath($Path)
+    while ($current) {
+        if (Test-Path -LiteralPath $current -ErrorAction Stop) {
+            if ((Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Repair path contains a link: $current" }
+        }
+        $parent=Split-Path $current -Parent
+        if ($parent -eq $current) { break }
+        $current=$parent
+    }
+}
+
+function Save-FixerSnapshot {
+    param([Parameter(Mandatory)][string]$Path,[Parameter(Mandatory)]$Snapshot)
+    Assert-FixerUnlinkedPath $Path
+    $temporary=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
+    try {
+        $json=ConvertTo-Json -InputObject $Snapshot -Depth 10
+        $json | Set-Content -LiteralPath $temporary -Encoding UTF8 -ErrorAction Stop
+        $saved=Get-Content -LiteralPath $temporary -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ((ConvertTo-Json -InputObject $saved -Depth 10 -Compress) -cne (ConvertTo-Json -InputObject $Snapshot -Depth 10 -Compress)) { throw 'Saved repair snapshot does not match the captured state.' }
+        Assert-FixerUnlinkedPath $temporary
+        Assert-FixerUnlinkedPath $Path
+        [IO.File]::Move($temporary,$Path)
+    } finally {
+        if (Test-Path -LiteralPath $temporary -ErrorAction SilentlyContinue) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 function Test-PendingReboot {
@@ -818,17 +848,18 @@ function Invoke-CacheCleanup {
     # Thumbnail cache
     try {
         $thumbPath = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-        if (Test-Path $thumbPath) {
+        Assert-FixerUnlinkedPath $thumbPath
+        if (Test-Path -LiteralPath $thumbPath -ErrorAction Stop) {
             $thumbs = @(Get-ChildItem -LiteralPath $thumbPath -Filter 'thumbcache_*.db' -File -EA Stop)
             if ($thumbs) {
                 $removed=0
-                foreach ($thumb in $thumbs) { try { Remove-Item -LiteralPath $thumb.FullName -Force -EA Stop; $removed++ } catch { $cacheAttention=$true } }
+                foreach ($thumb in $thumbs) { try { Assert-FixerUnlinkedPath $thumb.FullName; Remove-Item -LiteralPath $thumb.FullName -Force -EA Stop; $removed++ } catch { $cacheAttention=$true; Write-Status Warn ('Thumbnail kept: '+$_.Exception.Message) } }
                 Write-Status Info "Thumbnail cache: $removed of $($thumbs.Count) files removed; locked files retained."
             } else {
                 Write-Status OK 'Thumbnail cache already clean.'
             }
         }
-    } catch { Write-Status Warn 'Thumbnail cache skipped.' }
+    } catch { $cacheAttention=$true; Write-Status Warn ('Thumbnail cache skipped: '+$_.Exception.Message) }
 
     # Recycle Bin is personal data, not a cache required for system repair.
     # It is never emptied by Full Repair and is opt-in for menu option [3].
@@ -836,7 +867,7 @@ function Invoke-CacheCleanup {
         try {
             Clear-RecycleBin -Force -EA Stop
             Write-Status OK 'Recycle Bin emptied by explicit request.'
-        } catch { Write-Status Info 'Recycle Bin already empty or inaccessible.' }
+        } catch { $cacheAttention=$true; Write-Status Warn ('Recycle Bin request could not complete: '+$_.Exception.Message) }
     } else {
         Write-Status Skip 'Recycle Bin preserved.'
     }
@@ -847,7 +878,7 @@ function Invoke-CacheCleanup {
             Delete-DeliveryOptimizationCache -Force -EA Stop
             Write-Status OK 'Delivery Optimization cache cleared.'
         }
-    } catch { Write-Status Info 'Delivery Optimization cache skipped.' }
+    } catch { $cacheAttention=$true; Write-Status Warn ('Delivery Optimization cache skipped: '+$_.Exception.Message) }
 
     # NOTE: WSReset intentionally NOT run here - it pops the Store window
     # open. Use [10] Reset Windows Store Apps for that.
@@ -878,7 +909,8 @@ function Get-StaticNetworkDnsServers {
 function Backup-NetworkDnsState {
     try {
         $stateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\NetworkSnapshots'
-        if (-not (Test-Path -LiteralPath $stateRoot)) { New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null }
+        Assert-FixerUnlinkedPath $stateRoot
+        if (-not (Test-Path -LiteralPath $stateRoot -ErrorAction Stop)) { New-Item -ItemType Directory -Path $stateRoot -Force -ErrorAction Stop | Out-Null }
         # Snapshot every adapter, not just ones currently Up - a TCP/IP reset at reboot also affects disconnected adapters.
         $adapters = foreach ($adapter in Get-NetAdapter -EA Stop | Where-Object { $_.Name -notmatch 'Loopback' }) {
             $dns = Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -EA Stop
@@ -907,8 +939,8 @@ function Backup-NetworkDnsState {
             })
         }
         $snapshot = [PSCustomObject]@{ Schema = 2; Created = (Get-Date).ToString('o'); Adapters = @($adapters); DoH = @($doh) }
-        $path = Join-Path $stateRoot ("network_dns_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
-        $snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+        $path = Join-Path $stateRoot ("network_dns_{0}_{1}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'),[guid]::NewGuid().ToString('N'))
+        Save-FixerSnapshot -Path $path -Snapshot $snapshot
         Write-Status OK "DNS/DoH state backed up: $path"
         return $path
     } catch {
@@ -919,13 +951,57 @@ function Backup-NetworkDnsState {
 
 function Restore-NetworkDnsState {
     param([string]$Path)
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
     try {
+        if(-not $Path){return $false}
+        $snapshotRoot=[IO.Path]::GetFullPath((Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\NetworkSnapshots')).TrimEnd('\')+'\'
+        if(-not [IO.Path]::GetFullPath($Path).StartsWith($snapshotRoot,[StringComparison]::OrdinalIgnoreCase)){throw 'DNS recovery snapshot is outside the repair backup folder.'}
+        Assert-FixerUnlinkedPath $Path
+        if(-not(Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction Stop)){return $false}
         Import-Module (Join-Path $PSScriptRoot '..\Modules\Network.State.psm1') -Force -DisableNameChecking
-        $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        $snapshot = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if(($snapshot.Schema -isnot [int] -and $snapshot.Schema -isnot [long]) -or $snapshot.Schema -notin @(1,2) -or $snapshot.Adapters -isnot [array] -or -not $snapshot.Adapters.Count -or $snapshot.DoH -isnot [array]){throw 'DNS recovery snapshot has an unsupported or incomplete schema.'}
+        $currentAdapters=@(Get-NetAdapter -ErrorAction Stop);$restoreAdapters=@{}
+        foreach($adapter in $snapshot.Adapters){
+            $guid=[guid]::Empty
+            if($adapter.Name -isnot [string] -or [string]::IsNullOrWhiteSpace($adapter.Name) -or -not [guid]::TryParse([string]$adapter.InterfaceGuid,[ref]$guid)){throw 'DNS recovery snapshot has an invalid adapter identity.'}
+            $id=$guid.ToString()
+            if($restoreAdapters.ContainsKey($id)){throw 'DNS recovery snapshot contains duplicate adapters.'}
+            $current=@($currentAdapters|Where-Object{[guid]$_.InterfaceGuid -eq $guid})
+            if($current.Count -ne 1){throw "Original adapter is unavailable or ambiguous: $($adapter.Name)"}
+            $modern=$adapter.PSObject.Properties.Name -contains 'Automatic'
+            if(($snapshot.Schema -eq 2 -and -not $modern) -or ($modern -and $adapter.Automatic -isnot [bool])){throw 'DNS recovery snapshot has an invalid automatic DNS mode.'}
+            $families=@(@{Name=if($modern){'StaticIPv4'}else{'IPv4'};Id=2},@{Name=if($modern){'StaticIPv6'}else{'IPv6'};Id=23})
+            $available=@(Get-DnsClientServerAddress -InterfaceIndex $current[0].ifIndex -ErrorAction Stop)
+            if(-not $available.Count){throw 'Original adapter exposes no DNS address families.'}
+            $staticCount=0
+            foreach($family in $families){
+                $servers=$adapter.($family.Name)
+                if($servers -isnot [array]){throw 'DNS recovery snapshot has an invalid address-family inventory.'}
+                # Older backups captured Windows NameServer REG_SZ trailing NUL padding.
+                for($i=0;$i -lt $servers.Count;$i++){if($servers[$i] -is [string]){$servers[$i]=$servers[$i].TrimEnd([char]0)}}
+                $staticCount+=$servers.Count
+                if($servers.Count -and -not @($available|Where-Object{[int]$_.AddressFamily -eq $family.Id}).Count){throw 'Original adapter no longer exposes a saved DNS address family.'}
+                foreach($server in $servers){
+                    $ip=$null
+                    if($server -isnot [string] -or $server.Contains([string][char]0) -or -not [Net.IPAddress]::TryParse($server,[ref]$ip) -or [int]$ip.AddressFamily -ne $family.Id){throw 'DNS recovery snapshot has an invalid DNS server address or family.'}
+                }
+            }
+            if($modern -and $adapter.Automatic -ne ($staticCount -eq 0)){throw 'DNS recovery snapshot has inconsistent automatic/static DNS modes.'}
+            $restoreAdapters[$id]=$current[0]
+        }
+        $seen=@{}
+        foreach($entry in $snapshot.DoH){
+            $ip=$null;$uri=$null
+            if($entry.ServerAddress -isnot [string] -or -not [Net.IPAddress]::TryParse($entry.ServerAddress,[ref]$ip) -or $entry.DohTemplate -isnot [string] -or -not [Uri]::TryCreate($entry.DohTemplate,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -ne 'https' -or -not $uri.Host -or $uri.UserInfo -or $uri.Fragment -or $entry.AllowFallbackToUdp -isnot [bool] -or $entry.AutoUpgrade -isnot [bool]){throw 'DNS recovery snapshot has an invalid encrypted DNS record.'}
+            $id=$ip.ToString()
+            if($seen.ContainsKey($id)){throw 'DNS recovery snapshot contains duplicate encrypted DNS servers.'};$seen[$id]=$true
+        }
+        if($snapshot.DoH.Count){
+            foreach($command in @('Get-DnsClientDohServerAddress','Set-DnsClientDohServerAddress','Add-DnsClientDohServerAddress')){Get-Command $command -ErrorAction Stop|Out-Null}
+            $null=Get-DnsClientDohServerAddress -ErrorAction Stop
+        }
         foreach ($adapter in @($snapshot.Adapters)) {
-            $current=Get-NetAdapter -EA Stop | Where-Object { $_.InterfaceGuid.ToString().Trim('{}') -eq $adapter.InterfaceGuid.ToString().Trim('{}') } | Select-Object -First 1
-            if (-not $current) { throw "Original adapter no longer exists: $($adapter.Name)" }
+            $current=$restoreAdapters[([guid]$adapter.InterfaceGuid).ToString()]
             if ($adapter.PSObject.Properties.Name -contains 'Automatic') {
                 Set-AdapterDnsFamilies -Index $current.ifIndex -IPv4 @($adapter.StaticIPv4) -IPv6 @($adapter.StaticIPv6)
                 $actual=Get-StaticNetworkDnsServers -Adapter $current
@@ -1283,8 +1359,12 @@ function Invoke-CreateRestorePoint {
 
     Write-Status Info 'Creating restore point (this may take a moment)...'
     try {
-        Checkpoint-Computer -Description "PC Fixer v$Script:Version - $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -RestorePointType 'MODIFY_SETTINGS' -EA Stop
-        Write-Status OK 'System Restore Point created successfully.'
+        $description="PC Fixer v$Script:Version - $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+        $before=@(Get-ComputerRestorePoint -ErrorAction Stop | ForEach-Object SequenceNumber)
+        Checkpoint-Computer -Description $description -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop -WarningAction Stop
+        $created=@(Get-ComputerRestorePoint -ErrorAction Stop | Where-Object { $_.SequenceNumber -notin $before -and $_.Description -eq $description })
+        if (-not $created.Count) { throw 'Windows did not create a new repair restore point. Check System Protection and the restore-point frequency limit.' }
+        Write-Status OK 'System Restore Point created and verified.'
         $Script:Results['RestorePt'] = 'PASS - Restore point created'
     } catch {
         Write-Status Fail "Could not create restore point: $_"
@@ -1907,23 +1987,29 @@ function Invoke-IconCacheRebuild {
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $removed = 0
+    $cacheAttention=$false
     try {
+        $cacheDir = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
+        $legacy = "$env:LOCALAPPDATA\IconCache.db"
+        Assert-FixerUnlinkedPath $cacheDir
+        Assert-FixerUnlinkedPath $legacy
         Write-Status Info 'Stopping Explorer...'
         Get-Process -Name explorer -EA SilentlyContinue | Where-Object { $_.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId } | Stop-Process -Force -EA Stop
         Start-Sleep -Seconds 2
 
-        $cacheDir = "$env:LOCALAPPDATA\Microsoft\Windows\Explorer"
-        foreach ($pattern in 'iconcache_*.db', 'thumbcache_*.db') {
-            foreach ($f in (Get-ChildItem -Path (Join-Path $cacheDir $pattern) -Force -EA SilentlyContinue)) {
-                try { Remove-Item -LiteralPath $f.FullName -Force -EA Stop; $removed++ } catch { }
+        if (Test-Path -LiteralPath $cacheDir -ErrorAction Stop) {
+            foreach ($pattern in 'iconcache_*.db', 'thumbcache_*.db') {
+                foreach ($f in (Get-ChildItem -LiteralPath $cacheDir -Filter $pattern -File -Force -EA Stop)) {
+                    try { Assert-FixerUnlinkedPath $f.FullName; Remove-Item -LiteralPath $f.FullName -Force -EA Stop; $removed++ } catch { $cacheAttention=$true; Write-Status Warn ('Cache file kept: '+$_.Exception.Message) }
+                }
             }
         }
-        $legacy = "$env:LOCALAPPDATA\IconCache.db"
-        if (Test-Path -LiteralPath $legacy) {
-            try { Remove-Item -LiteralPath $legacy -Force -EA Stop; $removed++ } catch { }
+        if (Test-Path -LiteralPath $legacy -PathType Leaf -ErrorAction Stop) {
+            try { Assert-FixerUnlinkedPath $legacy; Remove-Item -LiteralPath $legacy -Force -EA Stop; $removed++ } catch { $cacheAttention=$true; Write-Status Warn ('Legacy icon cache kept: '+$_.Exception.Message) }
         }
         Write-Status OK "$removed cache files removed."
     } catch {
+        $cacheAttention=$true
         Write-Status Warn "Cache cleanup had errors: $_"
     } finally {
         # Windows 11 sometimes auto-restarts Explorer; only launch it if needed
@@ -1931,15 +2017,17 @@ function Invoke-IconCacheRebuild {
         Start-Sleep -Seconds 1
         if (-not (Get-Process -Name explorer -EA SilentlyContinue | Where-Object { $_.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId })) {
             Write-Status Info 'Restarting Explorer...'
-            Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe')
+            try { Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') -ErrorAction Stop | Out-Null }
+            catch { $cacheAttention=$true; Write-Status Warn ('Explorer could not restart: '+$_.Exception.Message) }
         }
     }
 
     Start-Sleep -Seconds 2
     $sw.Stop()
-    Write-Status OK 'Explorer is back. Icons/thumbnails will regenerate as you browse.'
+    if (-not (Get-Process -Name explorer -EA SilentlyContinue | Where-Object { $_.SessionId -eq [Diagnostics.Process]::GetCurrentProcess().SessionId })) { $cacheAttention=$true; Write-Status Warn 'Explorer is not running in this session. Start explorer.exe manually.' }
+    else { Write-Status OK 'Explorer is back. Icons/thumbnails will regenerate as you browse.' }
     Write-Status Info "Elapsed: $(Get-Elapsed $sw)"
-    $Script:Results['IconCache'] = "PASS - $removed cache files rebuilt"
+    $Script:Results['IconCache'] = if ($cacheAttention) { "WARN - $removed cache files removed; review skipped files or Explorer errors" } else { "PASS - $removed cache files rebuilt" }
 }
 
 # ============================================================================
@@ -2493,20 +2581,25 @@ function Invoke-OrphanServiceScan {
         $removed = 0
         if ($clean -eq 'y' -or $clean -eq 'Y') {
             $backupDir = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\ServiceBackups'
-            if (-not (Test-Path -LiteralPath $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
+            Assert-FixerUnlinkedPath $backupDir
+            if (-not (Test-Path -LiteralPath $backupDir -ErrorAction Stop)) { New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop | Out-Null }
+            $attention=$false
             foreach ($o in $orphans) {
                 $ans = Read-Host "  Delete service '$($o.Name)' ($($o.Display))? (y/N)"
                 if ($ans -eq 'y' -or $ans -eq 'Y') {
                     $current=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $o.Name.Replace("'","''")) -EA Stop
                     if (-not $current -or $current.State -ne 'Stopped' -or -not (Test-SuiteMissingExecutable ([Environment]::ExpandEnvironmentVariables((Get-ServiceExePath $current.PathName))))) {
                         Write-Status Warn "Service state/path changed or is no longer confirmed missing: $($o.Name). Not deleting."
+                        $attention=$true
                         continue
                     }
                     # Back up the service registration before deleting - sc delete has no undo.
-                    $backupFile = Join-Path $backupDir ("$($o.Name)_$(Get-Date -Format 'yyyyMMdd_HHmmss').reg")
+                    $backupFile = Join-Path $backupDir ("service_{0}.reg" -f [guid]::NewGuid().ToString('N'))
+                    Assert-FixerUnlinkedPath $backupFile
                     $exp = Invoke-Native-Quiet -FilePath 'reg.exe' -ArgumentList 'export', "HKLM\SYSTEM\CurrentControlSet\Services\$($o.Name)", $backupFile, '/y'
                     if ($exp.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $backupFile -PathType Leaf) -or (Get-Item -LiteralPath $backupFile).Length -eq 0) {
                         Write-Status Fail "Registry backup failed for $($o.Name) - not deleting."
+                        $attention=$true
                         continue
                     }
                     $del = Invoke-Native-Quiet -FilePath 'sc.exe' -ArgumentList 'delete', $o.Name
@@ -2515,12 +2608,13 @@ function Invoke-OrphanServiceScan {
                         $removed++
                     } else {
                         Write-Status Fail "Could not remove $($o.Name) (exit $($del.ExitCode)). Backup kept: $backupFile"
+                        $attention=$true
                     }
                 } else {
                     Write-Status Skip "$($o.Name) kept."
                 }
             }
-            $Script:Results['OrphanSvc'] = "PASS - $removed of $($orphans.Count) orphan(s) removed"
+            $Script:Results['OrphanSvc'] = if($attention){"WARN - $removed of $($orphans.Count) orphan(s) removed; review skipped or failed removals"}else{"PASS - $removed of $($orphans.Count) orphan(s) removed"}
         } else {
             Write-Status Skip 'No changes made (scan only).'
             $Script:Results['OrphanSvc'] = "WARN - $($orphans.Count) orphan(s) found, none removed"
@@ -2633,7 +2727,8 @@ function Get-AiRegistryEntryState {
 
 function New-AiFeatureSnapshot {
     $snapshotRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\AIFeatureSnapshots'
-    if (-not (Test-Path -LiteralPath $snapshotRoot)) { New-Item -ItemType Directory -Path $snapshotRoot -Force | Out-Null }
+    Assert-FixerUnlinkedPath $snapshotRoot
+    if (-not (Test-Path -LiteralPath $snapshotRoot -ErrorAction Stop)) { New-Item -ItemType Directory -Path $snapshotRoot -Force -ErrorAction Stop | Out-Null }
     $entries = foreach ($definition in Get-AiFeaturePolicyDefinitions) {
         Get-AiRegistryEntryState -Path $definition.Path -Name $definition.Name
     }
@@ -2644,33 +2739,55 @@ function New-AiFeatureSnapshot {
         User = [Security.Principal.WindowsIdentity]::GetCurrent().Name
         Entries = @($entries)
     }
-    $path = Join-Path $snapshotRoot ("ai_features_{0}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'))
-    $snapshot | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $path -Encoding UTF8
+    $path = Join-Path $snapshotRoot ("ai_features_{0}_{1}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'),[guid]::NewGuid().ToString('N'))
+    Save-FixerSnapshot -Path $path -Snapshot $snapshot
     return $path
 }
 
 function Get-LatestAiFeatureSnapshot {
     $snapshotRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\PCFixer\AIFeatureSnapshots'
-    $file = Get-ChildItem -LiteralPath $snapshotRoot -Filter 'ai_features_*.json' -ErrorAction SilentlyContinue |
+    Assert-FixerUnlinkedPath $snapshotRoot
+    if(-not(Test-Path -LiteralPath $snapshotRoot -ErrorAction Stop)){return $null}
+    $file = Get-ChildItem -LiteralPath $snapshotRoot -Filter 'ai_features_*.json' -File -ErrorAction Stop |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($file) { return $file.FullName }
+    if ($file) { Assert-FixerUnlinkedPath $file.FullName; return $file.FullName }
     return $null
 }
 
 function Restore-AiFeatureSnapshot {
     param([string]$Path)
     if (-not $Path) { $Path = Get-LatestAiFeatureSnapshot }
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
+    if($Path){Assert-FixerUnlinkedPath $Path}
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf -ErrorAction Stop)) {
         Write-Status Warn 'No AI-feature snapshot exists.'
         return $false
     }
-    $snapshot = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $snapshot = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     if($snapshot.Schema -ne 1 -or $snapshot.Computer -ne $env:COMPUTERNAME -or $snapshot.User -ne [Security.Principal.WindowsIdentity]::GetCurrent().Name){throw 'This AI policy snapshot belongs to another computer/user or has an unsupported schema.'}
     $restoreErrors = 0
     $allowed=@(Get-AiFeaturePolicyDefinitions)
+    if($snapshot.Entries -isnot [array] -or -not $snapshot.Entries.Count){throw 'AI policy snapshot has no registry state inventory.'}
+    $seen=@{};$pathStates=@{}
     foreach ($entry in @($snapshot.Entries)) {
-        if (-not @($allowed | Where-Object { $_.Path -eq $entry.Path -and $_.Name -eq $entry.Name }).Count) { throw 'AI policy snapshot contains an unsupported registry target.' }
+        foreach($name in @('Path','Name','PathExisted','ValueExisted','Kind','Value')){if($entry.PSObject.Properties.Name -notcontains $name){throw 'AI policy snapshot contains an incomplete registry state.'}}
+        if ($entry.Path -isnot [string] -or $entry.Name -isnot [string] -or -not @($allowed | Where-Object { $_.Path -eq $entry.Path -and $_.Name -eq $entry.Name }).Count) { throw 'AI policy snapshot contains an unsupported registry target.' }
         if ($entry.ValueExisted -isnot [bool] -or $entry.PathExisted -isnot [bool] -or ($entry.ValueExisted -and $entry.Kind -notin @('String','ExpandString','MultiString','Binary','QWord','DWord'))) { throw 'AI policy snapshot contains an invalid registry state.' }
+        if($entry.ValueExisted -and -not $entry.PathExisted){throw 'AI policy snapshot has inconsistent registry existence flags.'}
+        $id=$entry.Path+'\'+$entry.Name
+        if($seen.ContainsKey($id)){throw 'AI policy snapshot contains duplicate registry targets.'};$seen[$id]=$true
+        if($pathStates.ContainsKey($entry.Path) -and $pathStates[$entry.Path] -ne $entry.PathExisted){throw 'AI policy snapshot has inconsistent key existence flags.'};$pathStates[$entry.Path]=$entry.PathExisted
+        if($entry.ValueExisted){
+            $value=$entry.Value
+            $valid=switch($entry.Kind){
+                {$_ -in @('String','ExpandString')} {$value -is [string]}
+                Binary {($value -is [array]) -and @($value|Where-Object{($_ -isnot [int] -and $_ -isnot [long] -and $_ -isnot [byte]) -or $_ -lt 0 -or $_ -gt 255}).Count -eq 0}
+                DWord {($value -is [int] -or $value -is [long]) -and $value -ge [int]::MinValue -and $value -le [int]::MaxValue}
+                QWord {$value -is [int] -or $value -is [long]}
+                MultiString {($value -is [array]) -and @($value|Where-Object{$_ -isnot [string]}).Count -eq 0}
+                default {$false}
+            }
+            if(-not $valid){throw 'AI policy snapshot contains an invalid typed registry value.'}
+        }
     }
     foreach ($entry in @($snapshot.Entries)) {
         if ([bool]$entry.ValueExisted) {

@@ -106,7 +106,12 @@ try {
 
     # One real typed journal against an owned HKCU key; no real startup key is touched.
     Import-Module (Join-Path $root 'Modules\Toolkit.Core.psm1') -ArgumentList (Join-Path $fixture 'State') -Force -DisableNameChecking
-    & (Get-Module Toolkit.Core) { function script:Assert-Administrator { } }
+    & (Get-Module Toolkit.Core) {
+        param($key)
+        function script:Assert-Administrator { }
+        $script:AuditRemovalPath=$key
+        function script:Get-SuiteRegistryRemovalPaths { $script:AuditRemovalPath }
+    } $key
     New-Item -Path $key -Force | Out-Null
     New-ItemProperty -LiteralPath $key -Name 'Fixture' -Value ('"'+(Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')+'"') -PropertyType String | Out-Null
     function Assert-Admin { }
@@ -142,6 +147,17 @@ try {
     function Get-SuiteHistory { }
     Restore-LatestRegistryBackup
     Check ([IO.File]::ReadAllText($existing) -eq 'new user shortcut') 'Legacy file restore preserves an existing replacement'
+    $missing=Join-Path $fixture 'unexpected destination\restore.lnk'
+    [pscustomobject]@{Items=@([pscustomobject]@{Type='File';Path=$missing;Backup=$backup})} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $legacy 'manifest.json') -Encoding UTF8
+    Restore-LatestRegistryBackup
+    Check (-not(Test-Path -LiteralPath $missing)) 'Legacy manifest cannot create an arbitrary file destination'
+    Check ((Test-Path -LiteralPath $backup) -and [IO.File]::ReadAllText($backup) -eq 'old shortcut') 'Retired legacy restore preserves the original backup for manual recovery'
+    $regBackup=Join-Path $legacy 'unverified.reg'
+    [IO.File]::WriteAllText($regBackup,"Windows Registry Editor Version 5.00`r`n`r`n[$($key.Replace('HKCU:\','HKEY_CURRENT_USER\'))]`r`n`"LegacyImportSentinel`"=`"must not import`"`r`n",[Text.Encoding]::Unicode)
+    [pscustomobject]@{Items=@([pscustomobject]@{Type='Registry';Backup=$regBackup})} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $legacy 'manifest.json') -Encoding UTF8
+    Restore-LatestRegistryBackup
+    Check ($null -eq (Get-ItemProperty -LiteralPath $key -ErrorAction Stop).PSObject.Properties['LegacyImportSentinel']) 'Legacy manifest cannot import unverified whole-key registry files'
+    Check ((Test-Path -LiteralPath $regBackup) -and (Test-Path -LiteralPath (Join-Path $legacy 'manifest.json'))) 'Legacy registry and manifest files remain available for manual recovery'
     Remove-Item Function:Get-SuiteHistory
     function Read-Host { param($Prompt) '1-2147483647' }
     Invoke-PickCategories
@@ -163,7 +179,7 @@ try {
         $script:CleanerDebugEnabled=$true
         Write-CleanerDiagnostic 'Startup' "Action=Fixture; StateRoot=$StateRoot"
         $debug=Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\Cleaner_debug.log'
-        Check ((Get-Content -LiteralPath $debug -Raw) -match 'v1\.1\.1 Startup: Action=Fixture; StateRoot=') 'Enabled diagnostic records version and resolved configuration'
+        Check ((Get-Content -LiteralPath $debug -Raw) -match 'v1\.1\.2 Startup: Action=Fixture; StateRoot=') 'Enabled diagnostic records version and resolved configuration'
         [IO.File]::WriteAllBytes($debug,(New-Object byte[] 1048576))
         Write-CleanerDiagnostic 'Failure' 'fixture cause'
         Check ((Test-Path -LiteralPath ($debug+'.1')) -and (Get-Item -LiteralPath $debug).Length -lt 1MB) 'Diagnostic output rotates at one MiB'

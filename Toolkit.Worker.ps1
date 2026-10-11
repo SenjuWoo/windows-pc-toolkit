@@ -7,6 +7,8 @@ $report=$null
 try {
     Import-Module (Join-Path $PSScriptRoot 'Modules\Toolkit.Core.psm1') -Force -DisableNameChecking
     Assert-SuiteUnlinkedPath $RequestPath
+    Assert-SuiteStatePermissions (Split-Path ([IO.Path]::GetFullPath($RequestPath)) -Parent)
+    Assert-SuiteStatePermissions $RequestPath
     $request=Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $progress={param($run) Save-SuiteJson -Path $progressPath -Value $run}
     Write-SuiteDiagnostic 'Worker startup' "Operation=$($request.Operation); DataRoot=$(Get-SuiteDataRoot); Request=$RequestPath"
@@ -69,6 +71,10 @@ try {
     # Keep startup/import failures visible even when the shared module could not load.
     $json=$result | ConvertTo-Json -Depth 16
     if (Get-Command Assert-SuiteUnlinkedPath -ErrorAction SilentlyContinue) { Assert-SuiteUnlinkedPath $resultPath }
+    if (Get-Command Assert-SuiteStatePermissions -ErrorAction SilentlyContinue) {
+        Assert-SuiteStatePermissions (Split-Path ([IO.Path]::GetFullPath($resultPath)) -Parent)
+        Assert-SuiteStatePermissions $resultPath
+    }
     [IO.File]::WriteAllText($resultPath,$json,(New-Object Text.UTF8Encoding($false)))
     throw $failure
 }

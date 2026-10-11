@@ -1,4 +1,4 @@
-# PC Gaming Optimizer 5.0.1
+# PC Gaming Optimizer 5.0.2
 
 Gaming controls, diagnostics and maintenance integrated with the [dashboard](../README.md). Keep the full toolkit extracted together.
 

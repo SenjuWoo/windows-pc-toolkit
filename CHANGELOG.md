@@ -1,5 +1,16 @@
 # Changelog
 
+## Toolkit 3.0.2 (2026-10-11)
+
+- Cross-audit the whole kit again; validate complete recovery records before writes and reject unsupported targets, malformed values, duplicate records and unavailable original adapters.
+- Require exact AppX hash inventories and check permissions on existing Suite state directories.
+- Reject linked snapshot and Explorer cache paths; preserve skipped-file and Explorer restart failures in results.
+- Verify repair snapshots before changes and require a new native restore-point sequence before reporting success.
+- Correct disabled-but-running service recovery, incomplete DNS schema handling and obsolete Edge telemetry policy.
+- Retire unsafe automatic legacy file/whole-registry-key recovery while preserving its backup files for manual review; keep current typed undo.
+- Handle native DNS registry terminator padding and recover historical padded address arrays without accepting embedded corruption.
+- Add focused failure-path regressions; keep optimizerDuck recommendation, safe default scope and existing recovery data. See [the cross-audit](docs/AUDIT_2026-10-11.md).
+
 ## Toolkit 3.0.1 (2026-10-10)
 
 - Audited all components, wrappers, shared modules, dashboard/worker, recovery, tests, launchers, CI and documentation before further feature expansion. Detailed findings: [audit](docs/AUDIT_2026-10-10.md).

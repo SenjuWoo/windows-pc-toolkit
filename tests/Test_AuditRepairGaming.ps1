@@ -97,7 +97,7 @@ try {
         Check ($script:trimmed.Count -eq 1 -and $script:trimmed[0] -eq '1') 'Console ReTrim excludes HDD/unknown media'
     }
     & {
-        . (Load-Functions $fixer @('Get-AiRegistryEntryState','Restore-AiFeatureSnapshot','Write-FixerDiagnostic'))
+        . (Load-Functions $fixer @('Get-AiRegistryEntryState','Restore-AiFeatureSnapshot','Write-FixerDiagnostic','Assert-FixerUnlinkedPath'))
         $script:Results=[ordered]@{};$script:HasFailure=$false;$script:Version='7.2.1'
         $script:DebugLog=$false;$script:LogDir=Join-Path $fixture 'FixerLogs'
         $script:AllowedKey=$key

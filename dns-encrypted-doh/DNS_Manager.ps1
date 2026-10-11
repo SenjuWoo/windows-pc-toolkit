@@ -1,6 +1,6 @@
 ﻿#requires -version 5.1
 <#[
-Encrypted DNS Manager v2.2.1
+Encrypted DNS Manager v2.2.2
 Configures one coherent provider at a time. Every configured DNS IP is paired
 with its official HTTPS DoH template, UDP fallback is disabled, and prior DNS
 state is saved for exact rollback.
@@ -17,7 +17,7 @@ $ErrorActionPreference='Stop'
 $networkModule=@((Join-Path $PSScriptRoot '..\Modules\Network.State.psm1'),(Join-Path $PSScriptRoot '..\..\Modules\Network.State.psm1')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $networkModule) { throw 'The shared network module is missing. Extract the complete toolkit.' }
 Import-Module $networkModule -Force -DisableNameChecking
-$Version='2.2.1'
+$Version='2.2.2'
 $StateRoot=Join-Path $env:ProgramData 'WindowsPCToolkit\EncryptedDNS'
 $SnapshotRoot=Join-Path $StateRoot 'Snapshots'
 $DnsDebug=($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1')
@@ -50,7 +50,19 @@ function Test-Admin {
     $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 function Assert-Admin { if(-not (Test-Admin)){throw 'Run this tool as Administrator.'} }
-function Initialize-State { foreach($p in @($StateRoot,$SnapshotRoot)){if(-not(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Path $p -Force|Out-Null}} }
+function Assert-DnsStatePath {
+    param([string]$Path,[switch]$Snapshot)
+    $resolved=[IO.Path]::GetFullPath($Path)
+    if ($Snapshot -and -not $resolved.StartsWith(([IO.Path]::GetFullPath($SnapshotRoot).TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)) { throw 'DNS snapshot is outside its snapshot folder.' }
+    $cursor=$resolved
+    while ($cursor) {
+        if (Test-Path -LiteralPath $cursor -ErrorAction Stop) {
+            if ((Get-Item -LiteralPath $cursor -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Linked DNS state path is unsupported: $cursor" }
+        }
+        $parent=[IO.Path]::GetDirectoryName($cursor); if ($parent -eq $cursor) { break }; $cursor=$parent
+    }
+}
+function Initialize-State { foreach($p in @($StateRoot,$SnapshotRoot)){Assert-DnsStatePath $p;if(-not(Test-Path -LiteralPath $p)){New-Item -ItemType Directory -Path $p -Force|Out-Null}} }
 function Get-TargetServers { @($Providers.Values | ForEach-Object { @($_.V4)+@($_.V6) } | ForEach-Object { $_ } | Select-Object -Unique) }
 function Get-Adapters {
     $items=@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Status -eq 'Up')
@@ -103,21 +115,27 @@ function New-DnsSnapshot {
     $enc=foreach($s in $TouchedServers){$state=Get-DohStateForServer $s;if($state){$state}}
     $currentProvider=$null
     $currentPath=Join-Path $StateRoot 'current_provider.json'
+    Assert-DnsStatePath $currentPath
     if(Test-Path -LiteralPath $currentPath){$currentProvider=Get-Content -LiteralPath $currentPath -Raw -Encoding UTF8|ConvertFrom-Json}
     $obj=[pscustomobject]@{Schema=4;Created=(Get-Date).ToString('o');Computer=$env:COMPUTERNAME;Adapters=@($adapters);Encryption=@($enc);TouchedServers=@($TouchedServers);CurrentProvider=$currentProvider}
+    Assert-DnsSnapshot $obj
     $path=Join-Path $SnapshotRoot ("dns_{0}_{1}.json" -f (Get-Date -Format 'yyyyMMdd_HHmmss_fff'),[guid]::NewGuid().ToString('N'))
+    Assert-DnsStatePath $path -Snapshot
     $obj|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $path -Encoding UTF8
     $verified=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
     if ((ConvertTo-Json -InputObject $verified -Depth 8 -Compress) -ne (ConvertTo-Json -InputObject $obj -Depth 8 -Compress)) { throw 'DNS backup verification failed; no DNS settings were changed.' }
+    Assert-DnsStatePath (Join-Path $StateRoot 'latest_snapshot.txt')
     Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8
     Write-Status OK ("DNS snapshot saved: {0}" -f $path)
     return $path
 }
 function Get-LatestSnapshot {
+    Assert-DnsStatePath $SnapshotRoot
     $pointer=Join-Path $StateRoot 'latest_snapshot.txt'
-    if(Test-Path -LiteralPath $pointer){$p=(Get-Content -LiteralPath $pointer -Raw).Trim();if(Test-Path -LiteralPath $p){return $p}}
-    $f=Get-ChildItem -LiteralPath $SnapshotRoot -Filter 'dns_*.json' -ErrorAction SilentlyContinue|Sort-Object LastWriteTime -Descending|Select-Object -First 1
-    if($f){return $f.FullName};return $null
+    Assert-DnsStatePath $pointer
+    if(Test-Path -LiteralPath $pointer){$p=(Get-Content -LiteralPath $pointer -Raw).Trim();Assert-DnsStatePath $p -Snapshot;if(Test-Path -LiteralPath $p -PathType Leaf){return $p}}
+    $f=Get-ChildItem -LiteralPath $SnapshotRoot -Filter 'dns_*.json' -File -ErrorAction SilentlyContinue|Sort-Object LastWriteTime -Descending|Select-Object -First 1
+    if($f){Assert-DnsStatePath $f.FullName -Snapshot;return $f.FullName};return $null
 }
 function Remove-DohEntry {
     param([string]$Server)
@@ -208,25 +226,97 @@ function Test-Configuration {
 function Show-EncryptionTable {
     Get-DnsClientDohServerAddress -ErrorAction Stop|Format-Table ServerAddress,DohTemplate,AllowFallbackToUdp,AutoUpgrade -AutoSize
 }
+function Assert-DnsServerList {
+    param($Servers,[int]$Family=0)
+    if ($Servers -isnot [Array]) { throw 'DNS backup contains an invalid server list; no DNS settings were changed.' }
+    $seen=@{}
+    foreach ($server in $Servers) {
+        $ip=$null
+        if ($server -isnot [string] -or -not [Net.IPAddress]::TryParse($server,[ref]$ip) -or ($Family -and [int]$ip.AddressFamily -ne $Family)) { throw 'DNS backup contains an invalid address family or IP; no DNS settings were changed.' }
+        $key=$ip.ToString()
+        if ($seen.ContainsKey($key)) { throw 'DNS backup contains duplicate server addresses; no DNS settings were changed.' }; $seen[$key]=$true
+    }
+}
+function Assert-DnsTemplate {
+    param($Template)
+    $uri=$null
+    if ($Template -isnot [string] -or -not [Uri]::TryCreate($Template,[UriKind]::Absolute,[ref]$uri) -or $uri.Scheme -ne 'https' -or -not $uri.Host -or $uri.UserInfo -or $uri.Fragment) { throw 'DNS backup contains an invalid HTTPS template; no DNS settings were changed.' }
+}
+function Get-SnapshotTouchedServers {
+    param($Snapshot)
+    if ($Snapshot.PSObject.Properties.Name -contains 'TouchedServers') { return ,@($Snapshot.TouchedServers) }
+    # Older backups do not identify absent entries that an apply created. Do not
+    # infer a destructive global cleanup from today's different provider table.
+    return ,@($Snapshot.Encryption | ForEach-Object ServerAddress)
+}
+function Assert-DnsSnapshot {
+    param($Snapshot)
+    if ($null -eq $Snapshot -or $Snapshot.Schema -isnot [int] -or $Snapshot.Schema -notin @(2,3,4) -or $Snapshot.Adapters -isnot [Array] -or -not $Snapshot.Adapters.Count -or $Snapshot.Encryption -isnot [Array]) { throw 'Unsupported or malformed DNS backup; no DNS settings were changed.' }
+    if (($Snapshot.PSObject.Properties.Name -contains 'Computer' -and ($Snapshot.Computer -isnot [string] -or -not $Snapshot.Computer)) -or ($Snapshot.PSObject.Properties.Name -contains 'TouchedServers' -and $Snapshot.TouchedServers -isnot [Array])) { throw 'DNS backup contains invalid identity or touched-server state; no DNS settings were changed.' }
+    if ($Snapshot.Schema -eq 4 -and ($Snapshot.PSObject.Properties.Name -notcontains 'Computer' -or $Snapshot.Computer -isnot [string] -or -not $Snapshot.Computer -or $Snapshot.PSObject.Properties.Name -notcontains 'TouchedServers' -or $Snapshot.TouchedServers -isnot [Array])) { throw 'DNS backup is missing required identity or touched-server state; no DNS settings were changed.' }
+    $seen=@{}
+    foreach ($a in $Snapshot.Adapters) {
+        $guid=[guid]::Empty
+        if ($null -eq $a -or $a.InterfaceGuid -isnot [string] -or -not [guid]::TryParse($a.InterfaceGuid,[ref]$guid) -or $guid -eq [guid]::Empty -or $seen.ContainsKey($guid.ToString())) { throw 'DNS backup has invalid or duplicate adapter identities; no DNS settings were changed.' }; $seen[$guid.ToString()]=$true
+        if ($Snapshot.Schema -ge 3 -or $a.PSObject.Properties.Name -contains 'Automatic') {
+            if ($a.PSObject.Properties.Name -notcontains 'Automatic' -or $a.Automatic -isnot [bool] -or $a.PSObject.Properties.Name -notcontains 'StaticIPv4' -or $a.PSObject.Properties.Name -notcontains 'StaticIPv6') { throw 'DNS backup has invalid automatic/static state; no DNS settings were changed.' }
+            Assert-DnsServerList $a.StaticIPv4 2; Assert-DnsServerList $a.StaticIPv6 23
+            $count=$a.StaticIPv4.Count+$a.StaticIPv6.Count
+            if (($a.Automatic -and $count) -or (-not $a.Automatic -and -not $count)) { throw "DNS backup has inconsistent address modes for $($a.Name); no DNS settings were changed." }
+        } else { Assert-DnsServerList $a.IPv4 2; Assert-DnsServerList $a.IPv6 23 }
+    }
+    $touched=Get-SnapshotTouchedServers $Snapshot
+    Assert-DnsServerList $touched
+    $scope=@{};foreach ($server in $touched) { $scope[([Net.IPAddress]::Parse($server)).ToString()]=$true }
+    $seen=@{}
+    foreach ($entry in $Snapshot.Encryption) {
+        if ($null -eq $entry -or $entry.ServerAddress -isnot [string] -or $entry.AllowFallbackToUdp -isnot [bool] -or $entry.AutoUpgrade -isnot [bool]) { throw 'DNS backup contains invalid encryption address or flags; no DNS settings were changed.' }
+        Assert-DnsServerList @($entry.ServerAddress); Assert-DnsTemplate $entry.DohTemplate
+        $key=([Net.IPAddress]::Parse($entry.ServerAddress)).ToString()
+        if (-not $scope.ContainsKey($key) -or $seen.ContainsKey($key)) { throw 'DNS encryption entry is duplicated or outside its saved scope; no DNS settings were changed.' };$seen[$key]=$true
+    }
+    if ($Snapshot.PSObject.Properties.Name -contains 'CurrentProvider' -and $null -ne $Snapshot.CurrentProvider) {
+        $provider=$Snapshot.CurrentProvider
+        if ($provider.Key -isnot [string] -or -not $provider.Key -or $provider.Name -isnot [string] -or $provider.Applied -isnot [string]) { throw 'DNS backup contains invalid provider metadata; no DNS settings were changed.' }
+        Assert-DnsTemplate $provider.Template; Assert-DnsServerList $provider.Servers
+    }
+}
 function Restore-Snapshot {
     param([string]$Path)
     Assert-Admin;Initialize-State
     $path=if($Path){$Path}else{Get-LatestSnapshot};if(-not $path -or -not(Test-Path -LiteralPath $path)){throw 'No DNS snapshot exists.'}
+    Assert-DnsStatePath $path -Snapshot
     $snap=Get-Content -LiteralPath $path -Raw|ConvertFrom-Json
-    if ($snap.Schema -notin @(2,3,4)) { throw 'Unsupported DNS backup schema.' }
+    # Earlier captures retained native REG_SZ terminator padding in addresses.
+    foreach($adapter in @($snap.Adapters)) {
+        foreach($field in @('StaticIPv4','StaticIPv6','IPv4','IPv6')) {
+            if($adapter.PSObject.Properties.Name -contains $field -and $adapter.$field -is [Array]) {
+                $adapter.$field=@($adapter.$field | ForEach-Object {if($_ -is [string]){$_.TrimEnd([char]0)}else{$_}})
+            }
+        }
+    }
+    Assert-DnsSnapshot $snap
+    Assert-DnsStatePath (Join-Path $StateRoot 'current_provider.json')
     if ($snap.PSObject.Properties.Name -contains 'Computer' -and $snap.Computer -ne $env:COMPUTERNAME) { throw 'This DNS backup belongs to another computer.' }
     if (-not @($snap.Adapters).Count) { throw 'DNS backup contains no adapters; no DNS settings were changed.' }
     $availableAdapters=@(Get-NetAdapter -ErrorAction Stop)
     foreach ($a in @($snap.Adapters)) {
         if ($a.PSObject.Properties.Name -notcontains 'InterfaceGuid') { throw 'This legacy backup has no stable adapter identity; no DNS settings were changed.' }
-        if (-not @($availableAdapters | Where-Object { $_.InterfaceGuid.ToString().Trim('{}') -eq $a.InterfaceGuid.ToString().Trim('{}') }).Count) { throw "Original adapter no longer exists: $($a.Name). No DNS settings were changed." }
+        $current=@($availableAdapters | Where-Object { $_.InterfaceGuid.ToString().Trim('{}') -eq $a.InterfaceGuid.ToString().Trim('{}') })
+        if ($current.Count -ne 1) { throw "Original adapter no longer exists: $($a.Name). No DNS settings were changed." }
+        $families=@(Get-DnsClientServerAddress -InterfaceIndex $current[0].ifIndex -ErrorAction Stop)
+        if (-not $families.Count) { throw 'Original adapter exposes no DNS address families; no DNS settings were changed.' }
+        foreach ($family in @(@{Id=2;Field='IPv4'},@{Id=23;Field='IPv6'})) {
+            $field=if ($a.PSObject.Properties.Name -contains 'Automatic') { 'Static'+$family.Field } else { $family.Field }
+            if (@($a.$field).Count -and -not @($families | Where-Object { [int]$_.AddressFamily -eq $family.Id }).Count) { throw "Original adapter no longer exposes $($family.Field); no DNS settings were changed." }
+        }
         if ($a.PSObject.Properties.Name -contains 'Automatic') {
             if ($a.Automatic -isnot [bool] -or $a.PSObject.Properties.Name -notcontains 'StaticIPv4' -or $a.PSObject.Properties.Name -notcontains 'StaticIPv6') { throw 'DNS backup has invalid automatic/static state; no DNS settings were changed.' }
             $addresses=@(@($a.StaticIPv4)+@($a.StaticIPv6) | Where-Object {$_})
             if (([bool]$a.Automatic -and $addresses.Count) -or (-not [bool]$a.Automatic -and -not $addresses.Count)) { throw "DNS backup has inconsistent address modes for $($a.Name); no DNS settings were changed." }
         }
     }
-    $touched=if($snap.PSObject.Properties.Name -contains 'TouchedServers'){@($snap.TouchedServers)}else{@(Get-TargetServers)}
+    $touched=Get-SnapshotTouchedServers $snap
     foreach($server in $touched | Where-Object { @($snap.Encryption | ForEach-Object ServerAddress) -notcontains $_ }){Remove-DohEntry $server}
     foreach($entry in @($snap.Encryption)){Add-DohEntry -Server $entry.ServerAddress -Template $entry.DohTemplate -Fallback ([bool]$entry.AllowFallbackToUdp) -Upgrade ([bool]$entry.AutoUpgrade)}
     foreach($a in @($snap.Adapters)){
@@ -251,6 +341,7 @@ function Restore-Snapshot {
         }
     }
     $currentPath=Join-Path $StateRoot 'current_provider.json'
+    Assert-DnsStatePath $currentPath
     if($snap.PSObject.Properties.Name -contains 'CurrentProvider' -and $null -ne $snap.CurrentProvider){$snap.CurrentProvider|ConvertTo-Json -Depth 4|Set-Content -LiteralPath $currentPath -Encoding UTF8}
     else{Remove-Item -LiteralPath $currentPath -ErrorAction SilentlyContinue}
     Clear-DnsClientCache -ErrorAction SilentlyContinue
@@ -260,6 +351,10 @@ function Restore-Snapshot {
         if ($a.PSObject.Properties.Name -contains 'Automatic') {
             foreach ($family in @('IPv4','IPv6')) {
                 if ((@($a.("Static$family")) -join ',') -ne (@($static.$family) -join ',')) { throw "DNS restore verification failed for $($a.Name) $family." }
+            }
+        } else {
+            foreach ($family in @('IPv4','IPv6')) {
+                if ((@($a.$family) -join ',') -ne (@($static.$family) -join ',')) { throw "Legacy DNS restore verification failed for $($a.Name) $family." }
             }
         }
     }

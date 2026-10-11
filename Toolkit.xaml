@@ -40,7 +40,7 @@
       <DockPanel LastChildFill="True">
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,30">
           <TextBlock Text="PC TOOLKIT" FontWeight="Bold" FontSize="21"/>
-          <TextBlock Text="Windows · v3.0.1" Foreground="#7E94B2" Margin="0,8,0,0"/>
+          <TextBlock Text="Windows · v3.0.2" Foreground="#7E94B2" Margin="0,8,0,0"/>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom">
           <TextBlock Text="Portable. Local. No account." Foreground="#7E94B2" FontSize="12" Margin="0,0,0,12"/>

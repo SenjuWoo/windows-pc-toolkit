@@ -32,6 +32,7 @@ try {
         function Assert-Admin { }
         function Write-Status { param($Kind,$Message) if ($Kind -eq 'OK') { $script:SuccessMessages++ } }
         function Get-PrivacyTargets { @{P=$key;N='Fixture'} }
+        function Get-PrivacyServiceTargets { 'FixtureService' }
         function Get-TaskTargets { @{Path='\Fixture\';Name='FixtureTask'} }
         function Get-CimInstance { param($ClassName,$Filter) if ($script:FailInventory) { throw 'Injected service inventory failure' }; @() }
         function Get-ScheduledTask { param($TaskPath,$TaskName) if ($script:FailTasks) { throw 'Injected task inventory failure' }; @() }
@@ -81,6 +82,82 @@ try {
         function Read-Host { 'y' }
         Restore-LatestSnapshot
         Check ((Get-RegState $key 'Fixture').Value -eq '%TEMP%\literal') 'Confirmed legacy backup remains recoverable'
+        $safeSnapshot=$snapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $safeSnapshot.Services=@(); $safeSnapshot.Tasks=@()
+        foreach ($bad in @(
+            [pscustomobject]@{Path=$key;Name='Outside';Exists=$false;Kind=$null;Value=$null},
+            [pscustomobject]@{Path=$key;Name='Fixture';Exists='false';Kind=$null;Value=$null},
+            [pscustomobject]@{Path=$key;Name='Fixture';Exists=$true;Kind=@('String');Value='text'},
+            [pscustomobject]@{Path=$key;Name='Fixture';Exists=$true;Kind='DWord';Value=1.5},
+            [pscustomobject]@{Path=$key;Name='Fixture';Exists=$true;Kind='Binary';Value=@(256)},
+            [pscustomobject]@{Path=$key;Name='Fixture';Exists=$true;Kind='MultiString';Value=@(1)}
+        )) {
+            $invalid=$safeSnapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            $invalid.Registry=@($invalid.Registry)+@($bad)
+            $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Set-RegExact $key 'Fixture' 'preflight-marker' String
+            Expect-Failure { Restore-LatestSnapshot } '*privacy registry*' 'Invalid later privacy registry records fail full preflight'
+            Check ((Get-RegState $key 'Fixture').Value -eq 'preflight-marker') 'Registry preflight leaves earlier valid records unchanged'
+        }
+        foreach ($bad in @(
+            [pscustomobject]@{Name='wuauserv';StartMode='Disabled';State='Stopped'},
+            [pscustomobject]@{Name='FixtureService';StartMode=@('Auto');State='Stopped'},
+            [pscustomobject]@{Name='FixtureService';StartMode='Auto';State='Stopped';DelayedAutoStart=[pscustomobject]@{Path=$key;Name='Fixture';Exists=$false;Kind=$null;Value=$null}}
+        )) {
+            $invalid=$safeSnapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $invalid.Services=@($bad)
+            $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Expect-Failure { Restore-LatestSnapshot } '*privacy*' 'Out-of-scope privacy service and delayed-start targets fail preflight'
+            Check ((Get-RegState $key 'Fixture').Value -eq 'preflight-marker') 'Service preflight precedes every registry restore'
+        }
+        $invalid=$safeSnapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $invalid.Tasks=@([pscustomobject]@{Path='\Fixture\';Name='FixtureTask';Enabled='false'})
+        $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+        Expect-Failure { Restore-LatestSnapshot } '*privacy task*' 'String task flags cannot become truthy restore requests'
+        $invalid.Tasks=@([pscustomobject]@{Path='\Fixture\';Name='OutsideTask';Enabled=$false})
+        $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+        Expect-Failure { Restore-LatestSnapshot } '*privacy task*' 'Out-of-scope privacy tasks fail before registry mutation'
+        Check ((Get-RegState $key 'Fixture').Value -eq 'preflight-marker') 'Task preflight leaves earlier registry records unchanged'
+        $invalid=$safeSnapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $invalid | Add-Member -NotePropertyName Schema -NotePropertyValue '1' -Force
+        $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+        Expect-Failure { Restore-LatestSnapshot } '*privacy backup schema*' 'Privacy schema must be an integer instead of a coercible string'
+        & {
+            $service=[pscustomobject]@{Name='FixtureService';StartMode='Disabled';State='Stopped'}
+            $script:RestoreOrder=New-Object 'Collections.Generic.List[string]'
+            function Get-CimInstance { $service }
+            function Set-Service { param($Name,$StartupType) $script:RestoreOrder.Add($StartupType); $service.StartMode=$StartupType }
+            function Start-Service { param($Name) if ($service.StartMode -eq 'Disabled') { throw 'SCM 1058' };$script:RestoreOrder.Add('Start');$service.State='Running' }
+            $valid=$safeSnapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $valid.Registry=@();$valid.Services=@([pscustomobject]@{Name='FixtureService';StartMode='Disabled';State='Running'})
+            $valid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Restore-LatestSnapshot
+            Check (($script:RestoreOrder -join ',') -eq 'Manual,Start,Disabled' -and $service.StartMode -eq 'Disabled' -and $service.State -eq 'Running') 'Disabled-but-running service restores via temporary Manual startup'
+            $service.State='Stopped'
+            function Start-Service { throw 'Injected start failure' }
+            Expect-Failure { Restore-LatestSnapshot } '*Injected start failure*' 'Disabled-running restore propagates start failure'
+            Check ($service.StartMode -eq 'Disabled') 'Failed temporary service start still restores disabled startup mode'
+            $valid.Services[0] | Add-Member -NotePropertyName DelayedAutoStart -NotePropertyValue ([pscustomobject]@{Path='HKLM:\SYSTEM\CurrentControlSet\Services\FixtureService';Name='DelayedAutoStart';Exists=$false;Kind=$null;Value=$null})
+            $valid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            function Restore-RegState { throw 'Injected delayed-start restore failure' }
+            Expect-Failure { Restore-LatestSnapshot } '*Injected delayed-start restore failure*' 'Disabled-running restore propagates delayed-start failure'
+            Check ($service.StartMode -eq 'Disabled') 'Failed delayed-start restore still restores disabled startup mode'
+        }
+        & {
+            $writes=New-Object 'Collections.Generic.List[string]'
+            function Ensure-Snapshot { }
+            function Set-RegExact { param($Path,$Name,$Value,$Kind) $writes.Add("$Path|$Name|$Value") }
+            Apply-BrowserTelemetryPolicies
+            Check (@($writes | Where-Object { $_ -eq 'HKCU:\Software\Policies\Microsoft\Edge|DiagnosticData|0' }).Count -eq 1) 'Browser profile applies supported Edge DiagnosticData policy'
+            Check (-not @($writes | Where-Object { $_ -like 'HKCU:\Software\Policies\Microsoft\Edge|MetricsReportingEnabled|*' -or $_ -like '*\Windows\DataCollection|*' }).Count) 'Browser profile avoids obsolete Edge metrics and preserves Windows diagnostic level'
+        }
+        $outside=Join-Path $fixture 'outside-privacy.json'; '{}' | Set-Content -LiteralPath $outside -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $outside -Encoding UTF8
+        Expect-Failure { Get-LatestSnapshot } '*outside its snapshot folder*' 'Privacy pointer cannot select a foreign file'
+        Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8
+        $outsideRoot=Join-Path $fixture 'outside-privacy';[IO.Directory]::CreateDirectory($outsideRoot)|Out-Null
+        '{}' | Set-Content -LiteralPath (Join-Path $outsideRoot 'snapshot.json') -Encoding UTF8
+        $link=Join-Path $SnapshotRoot 'linked';New-Item -ItemType Junction -Path $link -Target $outsideRoot | Out-Null
+        Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value (Join-Path $link 'snapshot.json') -Encoding UTF8
+        try { Expect-Failure { Get-LatestSnapshot } '*Linked privacy state path*' 'Privacy pointer rejects a real junction inside its snapshot folder' }
+        finally { [IO.Directory]::Delete($link);Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8 }
+        $snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
         $snapshot.Services=@([pscustomobject]@{Name='FixtureService';StartMode='Auto';State='Running'})
         $snapshot | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
         $script:CurrentSnapshot=$path; $script:SuccessMessages=0
@@ -114,6 +191,22 @@ try {
 
     Import-Module (Join-Path $Root 'Modules\Network.State.psm1') -Force
     $network=Get-Module Network.State
+    $v4Key=Join-Path $key 'NativeDnsV4';$v6Key=Join-Path $key 'NativeDnsV6'
+    foreach($entry in @(@{Path=$v4Key;Value='192.0.2.1,192.0.2.2'},@{Path=$v6Key;Value='2001:db8::1,2001:db8::2'})) {
+        New-Item -Path $entry.Path -Force|Out-Null
+        New-ItemProperty -LiteralPath $entry.Path -Name NameServer -PropertyType String -Value ($entry.Value+([string][char]0*23)) -Force|Out-Null
+    }
+    & $network {
+        param($v4Key,$v6Key)
+        $script:NativeV4Key=$v4Key;$script:NativeV6Key=$v6Key
+        function script:Test-Path {param($LiteralPath) $true}
+        function script:Get-Item {param($LiteralPath) $path=if($LiteralPath -like '*\Tcpip6\*'){$script:NativeV6Key}else{$script:NativeV4Key};Microsoft.PowerShell.Management\Get-Item -LiteralPath $path -ErrorAction Stop}
+    } $v4Key $v6Key
+    try {
+        $captured=Get-AdapterStaticDnsServers -Adapter ([pscustomobject]@{InterfaceGuid=[guid]::NewGuid()})
+        Check (($captured.IPv4 -join ',') -ceq '192.0.2.1,192.0.2.2') 'Native REG_SZ IPv4 capture removes trailing NUL padding before splitting addresses'
+        Check (($captured.IPv6 -join ',') -ceq '2001:db8::1,2001:db8::2') 'Native REG_SZ IPv6 capture removes trailing NUL padding before splitting addresses'
+    } finally { & $network {Remove-Item Function:script:Test-Path,Function:script:Get-Item} }
     & $network {
         $script:Writes=0
         function script:Get-DnsClientServerAddress { param($InterfaceIndex) [pscustomobject]@{AddressFamily=2} }
@@ -163,6 +256,74 @@ try {
         $script:Writes=0
         Expect-Failure { Restore-Snapshot -Path $path } '*inconsistent address modes*' 'Malformed static DNS backup fails preflight'
         Check ($script:Writes -eq 0) 'Malformed backup cannot modify encryption or adapters'
+        $valid=$snapshot | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $valid.Adapters[0].StaticIPv4=@('9.9.9.9')
+        foreach ($case in @('MissingAutomatic','WrongFamily','BadFlags','OutsideScope','DuplicateAdapter','StringSchema','StringTouched','ArrayComputer')) {
+            $invalid=$valid | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            switch($case) {
+                'MissingAutomatic' { $invalid.Adapters[0].PSObject.Properties.Remove('Automatic') }
+                'WrongFamily' { $invalid.Adapters[0].StaticIPv4=@('2001:db8::1') }
+                'BadFlags' { $invalid.TouchedServers=@('192.0.2.1');$invalid.Encryption=@([pscustomobject]@{ServerAddress='192.0.2.1';DohTemplate='https://fixture.invalid/dns-query';AllowFallbackToUdp='false';AutoUpgrade=$true}) }
+                'OutsideScope' { $invalid.Encryption=@([pscustomobject]@{ServerAddress='192.0.2.1';DohTemplate='https://fixture.invalid/dns-query';AllowFallbackToUdp=$false;AutoUpgrade=$true}) }
+                'DuplicateAdapter' { $invalid.Adapters=@($invalid.Adapters[0],$invalid.Adapters[0]) }
+                'StringSchema' { $invalid.Schema='4' }
+                'StringTouched' { $invalid.TouchedServers='192.0.2.1' }
+                'ArrayComputer' { $invalid.Computer=@($env:COMPUTERNAME) }
+            }
+            $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            $script:Writes=0
+            Expect-Failure { Restore-Snapshot -Path $path } '*DNS*' "DNS $case backup fails preflight"
+            Check ($script:Writes -eq 0) "DNS $case cannot modify encryption or adapters"
+        }
+        & {
+            $otherGuid=[guid]::NewGuid()
+            $invalid=$valid | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            $other=$invalid.Adapters[0] | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            $other.InterfaceGuid=$otherGuid.ToString(); $other.InterfaceIndex=8; $other.StaticIPv6=@('2001:db8::1')
+            $invalid.Adapters=@($invalid.Adapters[0],$other)
+            $invalid | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            function Get-NetAdapter { Get-Adapters; [pscustomobject]@{Name='Other NIC';ifIndex=8;InterfaceGuid=$otherGuid} }
+            function Get-DnsClientServerAddress { param($InterfaceIndex) [pscustomobject]@{AddressFamily=2;ServerAddresses=@()}; if($InterfaceIndex -eq 7){[pscustomobject]@{AddressFamily=23;ServerAddresses=@()}} }
+            $script:Writes=0
+            Expect-Failure { Restore-Snapshot -Path $path } '*no longer exposes IPv6*' 'Later adapter family failure is preflighted before any DNS write'
+            Check ($script:Writes -eq 0) 'Later adapter preflight preserves earlier adapters and global encryption entries'
+        }
+        $outside=Join-Path $fixture 'outside-dns.json'; '{}' | Set-Content -LiteralPath $outside -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $outside -Encoding UTF8
+        Expect-Failure { Get-LatestSnapshot } '*outside its snapshot folder*' 'DNS pointer cannot select a foreign file'
+        Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8
+        $outsideRoot=Join-Path $fixture 'outside-dns';[IO.Directory]::CreateDirectory($outsideRoot)|Out-Null
+        '{}' | Set-Content -LiteralPath (Join-Path $outsideRoot 'snapshot.json') -Encoding UTF8
+        $link=Join-Path $SnapshotRoot 'linked';New-Item -ItemType Junction -Path $link -Target $outsideRoot | Out-Null
+        Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value (Join-Path $link 'snapshot.json') -Encoding UTF8
+        try { Expect-Failure { Get-LatestSnapshot } '*Linked DNS state path*' 'DNS pointer rejects a real junction inside its snapshot folder' }
+        finally { [IO.Directory]::Delete($link);Set-Content -LiteralPath (Join-Path $StateRoot 'latest_snapshot.txt') -Value $path -Encoding UTF8 }
+        $padded=$valid | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $padded.Adapters[0].StaticIPv4=@('9.9.9.9'+([string][char]0*23))
+        $padded | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+        $script:Writes=0;Restore-Snapshot -Path $path
+        Check ($script:Writes -gt 0) 'Modern DNS backups with native trailing NUL padding remain recoverable'
+        & {
+            $legacy=$valid | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            $legacy.Schema=2;$legacy.PSObject.Properties.Remove('TouchedServers');$legacy.Adapters[0].PSObject.Properties.Remove('Automatic');$legacy.Adapters[0].PSObject.Properties.Remove('StaticIPv4');$legacy.Adapters[0].PSObject.Properties.Remove('StaticIPv6')
+            $legacy.Adapters[0] | Add-Member -NotePropertyName IPv4 -NotePropertyValue @('194.242.2.2');$legacy.Adapters[0] | Add-Member -NotePropertyName IPv6 -NotePropertyValue @()
+            $legacy.Encryption=@([pscustomobject]@{ServerAddress='194.242.2.2';DohTemplate='https://dns.mullvad.net/dns-query';AllowFallbackToUdp=$false;AutoUpgrade=$true})
+            $legacy | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            $script:LegacyAdded=@();$script:LegacyRemoved=@()
+            function Add-DohEntry { param($Server,$Template,$Fallback,$Upgrade) $script:LegacyAdded+=@($Server) }
+            function Remove-DohEntry { param($Server) $script:LegacyRemoved+=@($Server) }
+            function Get-DohStateForServer { $legacy.Encryption[0] }
+            function Get-StaticDnsServers { [pscustomobject]@{IPv4=@('194.242.2.2');IPv6=@()} }
+            Restore-Snapshot -Path $path
+            Check (($script:LegacyAdded -join ',') -eq '194.242.2.2' -and $script:LegacyRemoved.Count -eq 0) 'Schema2 Mullvad undo preserves captured entries without inferred global deletions'
+            $legacy.Adapters[0].IPv4=@('194.242.2.2'+([string][char]0*23))
+            $legacy | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Restore-Snapshot -Path $path
+            Check ($script:LegacyAdded.Count -eq 2) 'Legacy DNS backups with native trailing NUL padding remain recoverable'
+            $legacy.Adapters[0].IPv4=@('194.242.'+[char]0+'2.2')
+            $legacy | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $path -Encoding UTF8
+            Expect-Failure { Restore-Snapshot -Path $path } '*DNS*' 'Embedded NUL addresses remain invalid instead of being silently joined'
+            Check ($script:LegacyAdded.Count -eq 2) 'Embedded NUL preflight prevents encryption mutations'
+        }
         function Restore-Snapshot { param($Path) $script:Rollback++ }
         Expect-Failure { Reset-Dhcp } '*Automatic DNS read-back failed*' 'DHCP reset cannot claim success when static DNS remains'
         Check ($script:Rollback -eq 1) 'DHCP reset verification failure attempts prior-state rollback'

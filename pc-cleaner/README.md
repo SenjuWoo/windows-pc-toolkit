@@ -1,4 +1,4 @@
-# PC Cleaner 1.1.1
+# PC Cleaner 1.1.2
 
 Scan-first cleanup and targeted registry repair. Use the [dashboard](../README.md) or `Run_As_Admin.bat` for the detailed console. Extract the complete toolkit; registry care uses shared root `Modules`.
 
@@ -18,7 +18,7 @@ All report-only categories appear in the scan. Windows.old, patcher backups, AI 
 
 Missing targets are listed for review. Only dead Run/RunOnce and MuiCache values with executables confirmed absent on a ready fixed local drive are eligible for removal. The startup command is read again immediately before repair. Offline/removable/network targets, ambiguous unquoted paths, permission failures, uninstall/App Paths registrations and shortcuts are kept.
 
-Numbered choices use one consistent order. Each removal saves exact value/type to the Suite journal before writing. A failed write attempts to restore that value. Menu **7** restores the latest registry-care operation, checks the result and preserves intervening changes. Legacy `.reg` backups remain available when no new registry-care journal exists; importing whole legacy keys requires confirmation, and existing shortcut files are preserved.
+Numbered choices use one consistent order. Each removal saves exact value/type to the Suite journal before writing. A failed write attempts to restore that value. Menu **7** restores the latest registry-care operation, checks the result and preserves intervening changes. Old file-copy/whole-key `.reg` manifests are kept for manual recovery; automatic legacy import is retired because those manifests cannot establish safe targets or original identity. The console displays their folder without copying files or importing keys.
 
 No broad sweep, COM deletion, registry defrag or FPS claim from unused keys.
 

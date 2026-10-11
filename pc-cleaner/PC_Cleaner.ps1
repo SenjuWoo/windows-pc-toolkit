@@ -1,7 +1,7 @@
 ﻿#requires -version 5.1
 <#
 .SYNOPSIS
-    PC Cleaner v1.1.1 - scan-first disk cleanup and registry care for Windows 10/11.
+    PC Cleaner v1.1.2 - scan-first disk cleanup and registry care for Windows 10/11.
 .DESCRIPTION
     Every category is labeled with what it is and why it is safe. Nothing is
     deleted without an explicit profile/pick and a confirmation. User data -
@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) { throw 'Run Cleaner as an administrator for your own Windows account; a different account would clean and change the wrong user profile.' }
-$Script:Version = '1.1.1'
+$Script:Version = '1.1.2'
 $script:CleanerDebugEnabled = ($Action -ne 'Library' -and ($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'))
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
@@ -651,37 +651,14 @@ function Restore-LatestRegistryBackup {
     $care=Get-SuiteHistory | Where-Object Mode -eq 'RegistryCare' | Select-Object -First 1
     if ($care) { $undo=Invoke-SuiteUndo $care.Path; Write-Status Info $undo.Message; return }
     Assert-Admin
+    if(-not(Test-Path -LiteralPath $RegBackupRoot -ErrorAction Stop)){Write-Status Warn 'No registry backups exist yet.';return}
+    if(-not(Test-CleanPathWithoutLinks $RegBackupRoot)){Write-Status Warn 'Legacy backup folder contains a link or cannot be inspected; automatic recovery refused.';return}
     $latest = Get-ChildItem -LiteralPath $RegBackupRoot -Directory -ErrorAction SilentlyContinue |
               Sort-Object Name -Descending | Select-Object -First 1
     if (-not $latest) { Write-Status Warn 'No registry backups exist yet.'; return }
-    $manifestPath = Join-Path $latest.FullName 'manifest.json'
-    if (-not (Test-Path -LiteralPath $manifestPath -ErrorAction SilentlyContinue)) { Write-Status Warn 'Latest backup has no manifest.'; return }
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    Write-Status Info ("Restoring backup from {0} ({1} item(s))..." -f $latest.Name, @($manifest.Items).Count)
-    if (@($manifest.Items | Where-Object Type -ne 'File').Count) {
-        Write-Status Warn 'Legacy registry snapshots import whole keys and can replace changes made after backup.'
-        if ((Read-Host '  Import these legacy registry snapshots? (y/N)') -notmatch '^[Yy]$') { Write-Status Skip 'Legacy backup retained; nothing restored.'; return }
-    }
-    $restored = 0
-    foreach ($item in @($manifest.Items)) {
-        if ($item.Type -eq 'File') {
-            try {
-                if (Test-Path -LiteralPath $item.Path) { Write-Status Skip ("Existing file kept: "+$item.Path); continue }
-                $dest = Split-Path $item.Path -Parent
-                if (-not (Test-Path -LiteralPath $dest -ErrorAction SilentlyContinue)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-                Copy-Item -LiteralPath $item.Backup -Destination $item.Path -Force -ErrorAction Stop
-                Write-Status OK "Restored file: $(Split-Path $item.Path -Leaf)"
-                $restored++
-            } catch { Write-Status Fail "Could not restore $($item.Path): $($_.Exception.Message)" }
-        } else {
-            if (Test-Path -LiteralPath $item.Backup -ErrorAction SilentlyContinue) {
-                & "$env:SystemRoot\System32\reg.exe" import $item.Backup 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) { Write-Status OK "Imported: $(Split-Path $item.Backup -Leaf)"; $restored++ }
-                else { Write-Status Fail "Import failed: $($item.Backup)" }
-            }
-        }
-    }
-    Write-Status OK "Restored $restored item(s). A sign-out may be needed for startup entries."
+    if(-not(Test-CleanPathWithoutLinks $latest.FullName)){Write-Status Warn 'Latest legacy backup contains a link or cannot be inspected; automatic recovery refused.';return}
+    Write-Status Warn 'Legacy manifests do not record a verifiable computer, user or restore scope; automatic file copying and whole-key registry imports are retired.'
+    Write-Status Info ("Backups are preserved at {0}. Review the manifest and backup contents for manual recovery. Current Registry Care reports use exact typed-value undo." -f $latest.FullName)
 }
 
 # ============================================================================

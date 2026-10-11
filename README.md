@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-**[Download v3.0.1](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.1/Windows-PC-Toolkit-3.0.1.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.1)
+**[Download v3.0.2](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.2/Windows-PC-Toolkit-3.0.2.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.2)
 
-**3.0.1 correctness audit.** This fixes cleanup, DNS, privacy recovery, repair reporting and launcher defects found in 3.0.0. See the [whole-project audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md). This update repairs existing features before further expansion.
+**3.0.2 safety cross-audit.** A second whole-project review fixes malformed recovery records, linked cache/state paths and repair backup/restore-point false success. See the [latest audit](docs/AUDIT_2026-10-11.md), [previous audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md). This update repairs existing features before further expansion.
 
 ![Toolkit dashboard](docs/images/dashboard.png)
 
@@ -14,7 +14,7 @@ Rendered from the actual WPF dashboard with initial selections. Hardware and res
 
 ## Start here
 
-Download the **[complete v3.0.1 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.1/Windows-PC-Toolkit-3.0.1.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
+Download the **[complete v3.0.2 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.2/Windows-PC-Toolkit-3.0.2.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
 
 For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
@@ -82,6 +82,10 @@ Registry state is saved **before** mutation, preserves types/literal environment
 
 App package copies now retain per-file hashes and are rechecked before registration. Changed copies are refused. Older app backups without saved hashes require reinstall through Microsoft Store. Repair/cache-only reports explicitly say that they contain no reversible changes.
 
+Recovery validates supported targets and complete saved values before applying them. Damaged or out-of-scope backups are refused; Suite state permissions are checked even when its folders already exist. Run one component operation at a time. Advanced console snapshots intentionally restore their recorded state and can replace later manual changes; review the snapshot and confirmation before restoring an older one.
+
+The cleaner's old file-copy/whole-key `.reg` manifests are retained for manual recovery; automatic legacy import is retired. Current typed registry-care journals continue to support checked undo.
+
 Recall is disabled using the supported Windows optional-feature API with no forced restart. Undo re-enables the recorded feature; pending servicing changes require a restart before verification. The dashboard removes the modern Copilot app rather than relying on the retiring legacy Copilot policy. AI controls preserve Windows AI frameworks and separate local-AI applications/model stores. Browser-policy support varies by version/profile. [Copilot removal](https://learn.microsoft.com/en-us/windows/client-management/manage-windows-copilot), [Recall management](https://learn.microsoft.com/en-us/windows/client-management/manage-recall), [Edge model policy](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-browser-policies/genailocalfoundationalmodelsettings).
 
 Deleted temporary/cache files, Recall snapshots and browser-built-in AI models are not recoverable through the journal. Windows/Store updates may offer apps again; removal affects the current account, not provisioning for future accounts. App removal can delete app data; backups support package re-registration, not app-data recovery. Dependencies/servicing may prevent re-registration; the report identifies failures and Microsoft Store remains the reinstall route. System repair is logged maintenance, not a reversible registry tweak.
@@ -92,12 +96,12 @@ Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `Ga
 
 | Component | Version | Documentation |
 | --- | ---: | --- |
-| Dashboard / core | 3.0.1 | This page |
-| Gaming Optimizer | 5.0.1 | [Gaming](pc-gaming-optimizer/README.md) |
-| PC Cleaner | 1.1.1 | [Cleanup/registry](pc-cleaner/README.md) |
-| Corruption Fixer | 7.2.1 | [Repair](pc-corruption-fixer/README.md) |
-| Privacy Guard | 2.1.1 | [Privacy](pc-privacy-guard/README.md) |
-| Encrypted DNS | 2.2.1 | [DNS](dns-encrypted-doh/README.md) |
+| Dashboard / core | 3.0.2 | This page |
+| Gaming Optimizer | 5.0.2 | [Gaming](pc-gaming-optimizer/README.md) |
+| PC Cleaner | 1.1.2 | [Cleanup/registry](pc-cleaner/README.md) |
+| Corruption Fixer | 7.2.2 | [Repair](pc-corruption-fixer/README.md) |
+| Privacy Guard | 2.1.2 | [Privacy](pc-privacy-guard/README.md) |
+| Encrypted DNS | 2.2.2 | [DNS](dns-encrypted-doh/README.md) |
 
 ## Requirements and validation
 

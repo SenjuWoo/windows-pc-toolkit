@@ -1,4 +1,4 @@
-# PC Privacy Guard v2.1.1
+# PC Privacy Guard v2.1.2
 
 A reversible Windows 10/11 privacy tool with two clearly separated profiles.
 
@@ -25,7 +25,9 @@ Before any profile or individual action, the app records the exact registry valu
 
 Undo checks the snapshot's computer/user, restores those values and verifies registry types, service states and task flags. Restore failures stop the success message and show the actual error. It does not delete whole Edge, Chrome, Firefox, or Windows policy branches, so unrelated settings remain intact.
 
-Version 2.1.1 records the identity fields that earlier snapshots omitted, verifies the backup before changes, and preserves delayed automatic service startup. Legacy backups with no recorded identity require explicit confirmation before restoring. Failed service/task inventory aborts the backup; denied strict-profile writes and failed read-back checks report failure.
+Snapshots record computer/user identity, verify the backup before changes and preserve delayed automatic service startup. Complete target/type and service/task inventory checks run before restore writes; linked or foreign snapshot paths are refused. Disabled-but-running services restore through a temporary Manual startup state. Legacy backups with no recorded identity require explicit confirmation before restoring. Failed service/task inventory aborts the backup; denied strict-profile writes and failed read-back checks report failure.
+
+Edge telemetry uses the supported `DiagnosticData` policy (Edge 122+ on Windows), replacing the obsolete `MetricsReportingEnabled` setting. Browser policy read-back does not establish support for every managed configuration. [Microsoft policy documentation](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/diagnosticdata).
 
 ## Encrypted DNS
 

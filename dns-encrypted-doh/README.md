@@ -1,4 +1,4 @@
-# Encrypted DNS Manager 2.2.1
+# Encrypted DNS Manager 2.2.2
 
 Windows 11 DNS-over-HTTPS using one provider per physical adapter. Use the [dashboard](../README.md) or `DNS_Encrypted_Manager.bat`. Extract the full toolkit, including `Modules\Network.State.psm1`.
 
@@ -27,6 +27,8 @@ The supported Windows 11 `DnsClient` DoH cmdlets are required. An unavailable AP
 AdGuard checks validate configuration/resolution without claiming Quad9's live attestation. DoH does not change public IP or replace a VPN.
 
 Snapshots: `%ProgramData%\WindowsPCToolkit\EncryptedDNS\Snapshots`. Schema 4 tracks affected encryption entries. Schema 2/3 backups with stable adapter identity remain readable; only backups that recorded mode can restore automatic/static exactly.
+
+Restore validates the complete schema, address families, mode fields, HTTPS templates, boolean flags and declared encryption scope before writes. Modern backups missing mode data are refused. Linked state paths and snapshots outside the local snapshot folder are refused. Legacy backups without a touched-server list restore their captured entries without guessing which newer provider entries to delete.
 
 ```powershell
 .\DNS_Manager.ps1 -Action Quad9 -InterfaceIndex 12

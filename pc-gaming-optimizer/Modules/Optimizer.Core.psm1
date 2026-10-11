@@ -2,7 +2,7 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:ToolkitVersion = '5.0.1'
+$script:ToolkitVersion = '5.0.2'
 $script:StateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\GamingOptimizer'
 $script:SnapshotRoot = Join-Path $script:StateRoot 'Snapshots'
 $script:LogRoot = Join-Path $script:StateRoot 'Logs'
@@ -19,8 +19,19 @@ function Write-GamingDiagnostic {
     } catch { Write-Warning ('Could not write gaming diagnostic log: '+$_.Exception.Message) }
 }
 
+function Assert-GamingUnlinkedPath {
+    param([string]$Path)
+    $current=[IO.Path]::GetFullPath($Path)
+    while($current) {
+        if((Test-Path -LiteralPath $current) -and ((Get-Item -LiteralPath $current -Force -ErrorAction Stop).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw "Gaming state path contains a link: $current"}
+        $parent=Split-Path $current -Parent
+        if($parent -eq $current){break};$current=$parent
+    }
+}
+
 function Initialize-GamingToolkit {
     foreach ($path in @($script:StateRoot, $script:SnapshotRoot, $script:LogRoot)) {
+        Assert-GamingUnlinkedPath $path
         if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
     }
     Write-GamingDiagnostic INFO ("Start; StateRoot=$script:StateRoot; SnapshotRoot=$script:SnapshotRoot; Debug=$script:DebugLog")
@@ -93,6 +104,24 @@ function Restore-RegistryValueState {
     } else {
         if ((Get-RegistryValueState -Path $State.Path -Name $State.Name).Exists) { Remove-ItemProperty -LiteralPath $State.Path -Name $State.Name -ErrorAction Stop }
     }
+}
+
+function Assert-GamingRegistryState {
+    param([object]$State)
+    foreach($name in @('Path','Name','Exists','Kind','Value')){if($State.PSObject.Properties.Name -notcontains $name){throw 'Gaming snapshot has an incomplete registry state.'}}
+    if($State.Path -isnot [string] -or $State.Name -isnot [string] -or $State.Exists -isnot [bool]){throw 'Gaming snapshot has an invalid registry target or existence flag.'}
+    if(-not $State.Exists){if($null -ne $State.Kind -or $null -ne $State.Value){throw 'Gaming snapshot has an inconsistent absent registry value.'};return}
+    if($State.Kind -isnot [string]){throw 'Gaming snapshot has an invalid registry type.'}
+    $value=$State.Value
+    $valid=switch($State.Kind) {
+        {$_ -in @('String','ExpandString')} {$value -is [string]}
+        Binary {($value -is [array]) -and @($value|Where-Object{($_ -isnot [int] -and $_ -isnot [long] -and $_ -isnot [byte]) -or $_ -lt 0 -or $_ -gt 255}).Count -eq 0}
+        DWord {($value -is [int] -or $value -is [long]) -and $value -ge [int]::MinValue -and $value -le [int]::MaxValue}
+        QWord {$value -is [int] -or $value -is [long]}
+        MultiString {($value -is [array]) -and @($value|Where-Object{$_ -isnot [string]}).Count -eq 0}
+        default {$false}
+    }
+    if(-not $valid){throw 'Gaming snapshot has an invalid typed registry value.'}
 }
 
 function Get-ActivePowerSchemeGuid {
@@ -189,8 +218,10 @@ function Get-GamingRegistryTargets {
 function New-GamingSnapshot {
     param([string]$Reason='Manual change',[object[]]$RegistryTargets=(Get-GamingRegistryTargets),[switch]$IncludeServices,[switch]$IncludeBcd,[switch]$IncludeNetwork)
     Initialize-GamingToolkit
-    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+    $stamp = (Get-Date -Format 'yyyyMMdd_HHmmss_fff')+'_'+[guid]::NewGuid().ToString('N')
     $path = Join-Path $script:SnapshotRoot ("gaming_{0}.json" -f $stamp)
+    Assert-GamingUnlinkedPath $path
+    Assert-GamingUnlinkedPath (Join-Path $script:StateRoot 'latest_snapshot.txt')
     $registry = foreach ($t in $RegistryTargets) { Get-RegistryValueState -Path $t.Path -Name $t.Name }
     $services = if ($IncludeServices) { foreach ($name in @('SysMain')) {
         $svc = Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $name) -ErrorAction Stop
@@ -210,13 +241,14 @@ function New-GamingSnapshot {
 
 function Get-LatestGamingSnapshotPath {
     $pointer = Join-Path $script:StateRoot 'latest_snapshot.txt'
+    Assert-GamingUnlinkedPath $pointer
     if (Test-Path -LiteralPath $pointer) {
         $path = (Get-Content -LiteralPath $pointer -Raw).Trim()
-        if ([IO.Path]::GetFullPath($path).StartsWith([IO.Path]::GetFullPath($script:SnapshotRoot).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $path -PathType Leaf)) { return $path }
+        if ([IO.Path]::GetFullPath($path).StartsWith([IO.Path]::GetFullPath($script:SnapshotRoot).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $path -PathType Leaf)) { Assert-GamingUnlinkedPath $path; return $path }
         Write-ToolStatus WARN 'Snapshot pointer is outside the local snapshot folder or missing; using the newest local snapshot instead.'
     }
     $latest = Get-ChildItem -LiteralPath $script:SnapshotRoot -Filter 'gaming_*.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($latest) { return $latest.FullName }
+    if ($latest) { Assert-GamingUnlinkedPath $latest.FullName; return $latest.FullName }
     return $null
 }
 
@@ -226,20 +258,62 @@ function Restore-LatestGamingSnapshot {
     $path = Get-LatestGamingSnapshotPath
     if (-not $path) { Write-ToolStatus WARN 'No optimizer snapshot exists yet.'; return }
     $snap = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if ($snap.Schema -notin @(1,2,3)) { throw 'Unsupported gaming snapshot schema.' }
+    if ($snap.Schema -isnot [int] -or $snap.Schema -notin @(1,2,3)) { throw 'Unsupported gaming snapshot schema.' }
+    foreach($name in @('Registry','Services')){if($snap.$name -isnot [array]){throw 'Gaming snapshot has an invalid state inventory.'}}
+    foreach($name in @('NetworkAdapters','BcdOverrides')){if($snap.PSObject.Properties.Name -contains $name -and $snap.$name -isnot [array]){throw 'Gaming snapshot has an invalid optional inventory.'}}
     if ($snap.Schema -eq 3 -and ($snap.Computer -ne $env:COMPUTERNAME -or $snap.UserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) { throw 'This gaming snapshot belongs to another computer or user.' }
     if ($snap.Schema -lt 3) { Write-ToolStatus WARN 'Legacy snapshot has no recorded computer/user identity and may include unrelated settings. Restore only your own local backup.' }
     $allowed=@(Get-GamingRegistryTargets)
+    $seen=@{}
     foreach ($state in @($snap.Registry)) {
         if (-not @($allowed | Where-Object { $_.Path -eq $state.Path -and $_.Name -eq $state.Name }).Count) { throw 'Gaming snapshot contains an unsupported registry target.' }
-        if ($state.Exists -isnot [bool] -or ($state.Exists -and $state.Kind -notin @('String','ExpandString','Binary','DWord','MultiString','QWord'))) { throw 'Gaming snapshot contains an invalid registry state.' }
+        Assert-GamingRegistryState $state
+        $id=$state.Path+'\'+$state.Name
+        if($seen.ContainsKey($id)){throw 'Gaming snapshot contains duplicate registry targets.'};$seen[$id]=$true
     }
     foreach ($svcState in @($snap.Services)) {
-        if ($svcState.Name -ne 'SysMain' -or $svcState.StartMode -notin @('Auto','Manual','Disabled') -or $svcState.State -notin @('Running','Stopped')) { throw 'Gaming snapshot contains an unsupported service state.' }
+        if ($svcState.Name -isnot [string] -or $svcState.StartMode -isnot [string] -or $svcState.State -isnot [string] -or $svcState.Name -ne 'SysMain' -or $svcState.StartMode -notin @('Auto','Manual','Disabled') -or $svcState.State -notin @('Running','Stopped')) { throw 'Gaming snapshot contains an unsupported service state.' }
+        if(-not(Get-CimInstance Win32_Service -Filter "Name='SysMain'" -ErrorAction Stop)){throw 'Original service is unavailable: SysMain'}
     }
+    if(@($snap.Services).Count -gt 1){throw 'Gaming snapshot contains duplicate service targets.'}
     if ($snap.PowerScheme -and $snap.PowerScheme -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { throw 'Gaming snapshot contains an invalid power scheme.' }
+    if($snap.PowerScheme){
+        $schemes=@(& "$env:SystemRoot\System32\powercfg.exe" /list 2>$null)
+        if($LASTEXITCODE -ne 0 -or ($schemes -join ' ') -notmatch [regex]::Escape($snap.PowerScheme)){throw 'Original power scheme is unavailable.'}
+    }
     if ($snap.PSObject.Properties.Name -contains 'BcdOverrides') {
-        foreach ($state in @($snap.BcdOverrides)) { if ($state.Name -notin @('useplatformclock','useplatformtick','disabledynamictick','tscsyncpolicy') -or $state.Exists -isnot [bool]) { throw 'Gaming snapshot contains an unsupported boot state.' } }
+        $seen=@{}
+        foreach ($state in @($snap.BcdOverrides)) {
+            if ($state.Name -notin @('useplatformclock','useplatformtick','disabledynamictick','tscsyncpolicy') -or $state.Exists -isnot [bool]) { throw 'Gaming snapshot contains an unsupported boot state.' }
+            $values=if($state.Name -eq 'tscsyncpolicy'){@('Default','Legacy','Enhanced')}else{@('Yes','No')}
+            if($state.Exists -and ($state.Value -isnot [string] -or $state.Value -notin $values)){throw 'Gaming snapshot contains an invalid boot value.'}
+            if($seen.ContainsKey($state.Name)){throw 'Gaming snapshot contains duplicate boot targets.'};$seen[$state.Name]=$true
+        }
+        if(@($snap.BcdOverrides).Count){$null=Get-BcdOverrideStates}
+    }
+    $restoreAdapters=@{};$adapterIds=@{}
+    if($snap.PSObject.Properties.Name -contains 'NetworkAdapters') {
+        foreach($state in @($snap.NetworkAdapters)) {
+            foreach($name in @('RssAvailable','RssEnabled','RscAvailable','RscIPv4Enabled','RscIPv6Enabled')){
+                if($state.PSObject.Properties.Name -notcontains $name -or $state.$name -isnot [bool]){throw 'Gaming snapshot contains an invalid adapter state.'}
+            }
+            if($state.Name -isnot [string] -or [string]::IsNullOrWhiteSpace($state.Name)){throw 'Gaming snapshot is missing an adapter name.'}
+            if($state.PSObject.Properties.Name -contains 'InterfaceGuid'){
+                $guid=[guid]::Empty
+                if(-not[guid]::TryParse([string]$state.InterfaceGuid,[ref]$guid)){throw 'Gaming snapshot contains an invalid adapter identity.'}
+                $adapters=@(Get-NetAdapter -ErrorAction Stop|Where-Object{[string]$_.InterfaceGuid -eq $state.InterfaceGuid})
+            }else{
+                if($snap.Schema -eq 3){throw 'Gaming snapshot is missing an adapter identity.'}
+                $adapters=@(Get-NetAdapter -Name $state.Name -ErrorAction Stop)
+            }
+            if($adapters.Count -ne 1){throw "Original adapter not found uniquely: $($state.Name)"}
+            $id=[string]$adapters[0].InterfaceGuid
+            if($restoreAdapters.ContainsKey($state.Name) -or $adapterIds.ContainsKey($id)){throw 'Gaming snapshot contains duplicate adapter targets.'}
+            $adapterIds[$id]=$true
+            $restoreAdapters[$state.Name]=$adapters[0]
+            if($state.RssAvailable -and -not(Get-NetAdapterRss -Name $adapters[0].Name -ErrorAction Stop)){throw 'Original RSS capability is unavailable.'}
+            if($state.RscAvailable -and -not(Get-NetAdapterRsc -Name $adapters[0].Name -ErrorAction Stop)){throw 'Original RSC capability is unavailable.'}
+        }
     }
     Write-ToolStatus WARN 'Restoring a console snapshot can replace later manual changes. Review its path and scope before continuing.'
     if ((Read-Host ("  Restore snapshot '$path'? (y/N)")) -notmatch '^[Yy]$') { return }
@@ -250,16 +324,20 @@ function Restore-LatestGamingSnapshot {
     }
     foreach ($svcState in @($snap.Services)) {
         $startType = switch ($svcState.StartMode) { 'Auto' {'Automatic'} 'Manual' {'Manual'} 'Disabled' {'Disabled'} default {$null} }
-        if ($startType) { Set-Service -Name $svcState.Name -StartupType $startType -ErrorAction Stop }
-        if ($svcState.State -eq 'Running') { Start-Service -Name $svcState.Name -ErrorAction Stop }
-        elseif ($svcState.State -eq 'Stopped') { Stop-Service -Name $svcState.Name -Force -ErrorAction Stop }
+        if($svcState.State -eq 'Running' -and $startType -eq 'Disabled'){Set-Service -Name $svcState.Name -StartupType Manual -ErrorAction Stop}
+        elseif ($startType) { Set-Service -Name $svcState.Name -StartupType $startType -ErrorAction Stop }
+        try {
+            if ($svcState.State -eq 'Running') { Start-Service -Name $svcState.Name -ErrorAction Stop }
+            elseif ($svcState.State -eq 'Stopped') { Stop-Service -Name $svcState.Name -ErrorAction Stop }
+        } finally {
+            if($svcState.State -eq 'Running' -and $startType -eq 'Disabled'){Set-Service -Name $svcState.Name -StartupType Disabled -ErrorAction Stop}
+        }
         $actualService=Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $svcState.Name) -ErrorAction Stop
         if ($actualService.State -ne $svcState.State -or $actualService.StartMode -ne $svcState.StartMode) { throw "Service restore verification failed: $($svcState.Name)" }
     }
     if ($snap.PSObject.Properties.Name -contains 'NetworkAdapters') {
         foreach ($adapterState in @($snap.NetworkAdapters)) {
-            $adapter = if ($adapterState.PSObject.Properties.Name -contains 'InterfaceGuid') { Get-NetAdapter -ErrorAction Stop | Where-Object { $_.InterfaceGuid.ToString() -eq $adapterState.InterfaceGuid } | Select-Object -First 1 } else { Get-NetAdapter -Name $adapterState.Name -ErrorAction Stop }
-            if (-not $adapter) { throw "Original adapter not found: $($adapterState.Name)" }
+            $adapter = $restoreAdapters[$adapterState.Name]
             if ($adapterState.RssAvailable) {
                 if ($adapterState.RssEnabled) { Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction Stop }
                 else { Disable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction Stop }

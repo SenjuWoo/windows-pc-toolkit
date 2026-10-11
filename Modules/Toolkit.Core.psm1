@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 $script:SuiteRoot=Split-Path $PSScriptRoot -Parent
 $script:SuiteDataRoot=$DataRoot
-$script:SuiteVersion='3.0.1'
+$script:SuiteVersion='3.0.2'
 
 function Write-SuiteDiagnostic {
     param([string]$Operation,[string]$Message,[string]$Level='Debug',[string]$RunId)
@@ -45,6 +45,20 @@ Import-Module (Resolve-SuitePath @('pc-gaming-optimizer\Modules\Optimizer.Core.p
 function Get-SuiteDataRoot { $script:SuiteDataRoot }
 function Get-SuiteVersion { $script:SuiteVersion }
 function Get-SuiteIdentity { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
+function Assert-SuiteStatePermissions {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $trusted=@('S-1-5-18','S-1-5-32-544',(Get-SuiteIdentity))
+    $acl=Get-Acl -LiteralPath $Path -ErrorAction Stop
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { throw 'Toolkit state has an untrusted owner. Do not use its reports or requests.' }
+    $writes=[Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+    foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+        if ($rule.AccessControlType -eq 'Allow' -and ($rule.FileSystemRights -band $writes) -and $rule.IdentityReference.Value -notin $trusted) {
+            throw 'Toolkit state is writable by another account. Existing data cannot be trusted; no changes were applied.'
+        }
+    }
+}
 function Initialize-SuiteState {
     Assert-SuiteUnlinkedPath $script:SuiteDataRoot
     if (-not (Test-Path -LiteralPath $script:SuiteDataRoot)) {
@@ -58,15 +72,23 @@ function Initialize-SuiteState {
         }
         Set-Acl -LiteralPath $script:SuiteDataRoot -AclObject $acl
     }
+    Assert-SuiteStatePermissions $script:SuiteDataRoot
     foreach ($name in @('Runs','Requests','AppBackups')) {
         $path=Join-Path $script:SuiteDataRoot $name
         Assert-SuiteUnlinkedPath $path
+        Assert-SuiteStatePermissions $path
         [void][IO.Directory]::CreateDirectory($path)
     }
 }
 function Save-SuiteJson {
     param([string]$Path,[object]$Value)
     Assert-SuiteUnlinkedPath $Path
+    $state=[IO.Path]::GetFullPath($script:SuiteDataRoot).TrimEnd('\')+'\'
+    if ([IO.Path]::GetFullPath($Path).StartsWith($state,[StringComparison]::OrdinalIgnoreCase)) {
+        Assert-SuiteStatePermissions $script:SuiteDataRoot
+        Assert-SuiteStatePermissions (Split-Path $Path -Parent)
+        Assert-SuiteStatePermissions $Path
+    }
     $json=$Value | ConvertTo-Json -Depth 16
     $null=$json | ConvertFrom-Json
     $temporary=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
@@ -117,6 +139,7 @@ function Set-SuiteRegistry {
 }
 function Undo-SuiteRegistryEntry {
     param($Entry)
+    Assert-SuiteRegistryEntry $Entry
     if ($Entry.Status -eq 'Restored') { return }
     $current=Get-RegistryValueState -Path $Entry.Before.Path -Name $Entry.Before.Name
     if (Test-SuiteRegistryEqual $current $Entry.Before) { $Entry.Status='Restored'; return }
@@ -124,6 +147,96 @@ function Undo-SuiteRegistryEntry {
     Restore-RegistryValueState $Entry.Before
     if (-not (Test-SuiteRegistryEqual (Get-RegistryValueState $Entry.Before.Path $Entry.Before.Name) $Entry.Before)) { throw 'Registry undo read-back failed.' }
     $Entry.Status='Restored'
+}
+
+function Assert-SuiteRegistryState {
+    param($State)
+    if (-not $State -or $State.Path -isnot [string] -or $State.Path -notmatch '^HK(?:CU|LM):\\' -or
+        $State.Name -isnot [string] -or $State.Name.Length -gt 16383 -or $State.Name.Contains([string][char]0) -or $State.Exists -isnot [bool]) { throw 'Invalid registry backup target/state.' }
+    if (-not $State.Exists) { return }
+    if ($State.Kind -notin @('String','ExpandString','MultiString','Binary','DWord','QWord')) { throw 'Unsupported registry backup type.' }
+    switch ($State.Kind) {
+        { $_ -in @('String','ExpandString') } { if ($State.Value -isnot [string] -or $State.Value.Length -gt 1MB) { throw 'Invalid registry string backup.' } }
+        'MultiString' { if ($State.Value -isnot [array] -or @($State.Value).Count -gt 4096 -or @($State.Value | Where-Object { $_ -isnot [string] -or $_.Length -gt 1MB }).Count) { throw 'Invalid registry multi-string backup.' } }
+        'Binary' { if ($State.Value -isnot [array] -or @($State.Value).Count -gt 1MB -or @($State.Value | Where-Object { ($_ -isnot [int] -and $_ -isnot [long] -and $_ -isnot [byte]) -or $_ -lt 0 -or $_ -gt 255 }).Count) { throw 'Invalid registry binary backup.' } }
+        'DWord' { if (($State.Value -isnot [int] -and $State.Value -isnot [long]) -or $State.Value -lt [int]::MinValue -or $State.Value -gt [int]::MaxValue) { throw 'Invalid registry DWORD backup.' } }
+        'QWord' { if ($State.Value -isnot [int] -and $State.Value -isnot [long]) { throw 'Invalid registry QWORD backup.' } }
+    }
+}
+function Assert-SuiteRegistryEntry {
+    param($Entry)
+    Assert-SuiteRegistryState $Entry.Before
+    Assert-SuiteRegistryState $Entry.After
+    if ($Entry.Before.Path -ne $Entry.After.Path -or $Entry.Before.Name -ne $Entry.After.Name -or $Entry.Status -notin @('Pending','Applied','Restored')) { throw 'Registry backup target/status changed.' }
+}
+function Get-SuiteRegistryUndoTargets {
+    foreach ($action in Get-SuiteActionCatalog) { foreach ($target in $action.Targets) {
+        [pscustomobject]@{Path=$target.Path;Name=$target.Name;Exists=$true;Kind=$(if ($target.ContainsKey('Kind')) { $target.Kind } else { 'DWord' });Value=$target.Value}
+    } }
+}
+function Get-SuiteRegistryRemovalPaths {
+    @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run',
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce',
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce','HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache')
+}
+function Get-SuiteConsumerAppNames {
+    @('Microsoft.Copilot','Clipchamp.Clipchamp','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.MicrosoftOfficeHub','Microsoft.MicrosoftSolitaireCollection','Microsoft.People','Microsoft.Todos','Microsoft.WindowsFeedbackHub','Microsoft.YourPhone','Microsoft.ZuneMusic','Microsoft.ZuneVideo','MicrosoftCorporationII.MicrosoftFamily')
+}
+function Assert-SuiteUndoJournal {
+    param($Run,[string]$Path)
+    if ($Run.Id -isnot [string] -or $Run.Id -notmatch '^\d{8}_\d{6}_\d{3}_[a-f0-9]{8}$' -or [IO.Path]::GetFileNameWithoutExtension($Path) -cne $Run.Id -or
+        $Run.Mode -notin @('Optimize','Startup','Debloat','RegistryCare','DNS','Repair') -or $Run.Status -notin @('Running','Completed','CompletedWithErrors','Failed','UndoNeedsAttention','Restored')) { throw 'Invalid recovery report identity/status.' }
+    foreach ($property in @('Registry','Tasks','Apps')) {
+        if ($Run.PSObject.Properties.Name -notcontains $property -or $Run.$property -isnot [array] -or @($Run.$property).Count -gt 4096) { throw 'Invalid or oversized recovery inventory.' }
+    }
+    $targets=@(Get-SuiteRegistryUndoTargets); $removals=@(Get-SuiteRegistryRemovalPaths)
+    $seen=@{}
+    foreach ($entry in $Run.Registry) {
+        Assert-SuiteRegistryEntry $entry
+        $id=$entry.Before.Path+[char]0+$entry.Before.Name
+        if ($seen.ContainsKey($id)) { throw 'Recovery report contains duplicate registry targets.' }; $seen[$id]=$true
+        if ($entry.After.Exists) {
+            if (-not @($targets | Where-Object { $_.Path -eq $entry.After.Path -and $_.Name -eq $entry.After.Name -and (Test-SuiteRegistryEqual $_ $entry.After) }).Count) { throw 'Registry recovery target/value is outside toolkit settings.' }
+        } elseif (-not $entry.Before.Exists -or $entry.Before.Path -notin $removals) { throw 'Registry removal backup is outside toolkit startup/MuiCache targets.' }
+    }
+    $seen=@{}
+    foreach ($entry in $Run.Tasks) {
+        if ($entry.Path -isnot [string] -or $entry.Path -notmatch '^\\' -or $entry.Path -notmatch '\\$' -or $entry.Path -like '\Microsoft\*' -or
+            $entry.Name -isnot [string] -or -not $entry.Name -or $entry.Name -match '[\\/\x00-\x1f]' -or $entry.Enabled -isnot [bool] -or -not $entry.Enabled -or $entry.Status -notin @('Pending','Applied','Restored')) { throw 'Invalid or protected task recovery target.' }
+        $id=$entry.Path+$entry.Name
+        if ($seen.ContainsKey($id)) { throw 'Recovery report contains duplicate task targets.' }; $seen[$id]=$true
+        if ($entry.Status -eq 'Restored' -or $Run.Status -eq 'Restored') { continue }
+        $task=Get-SuiteTask $entry.Path $entry.Name
+        if ($task.Author -match '(?i)Microsoft' -or -not @($task.Triggers | Where-Object { $null -ne $_ -and $_.CimClass.CimClassName -in @('MSFT_TaskLogonTrigger','MSFT_TaskBootTrigger') }).Count) { throw 'Task recovery target is no longer an optional startup task.' }
+    }
+    if ($Run.PSObject.Properties.Name -contains 'Features') {
+        if ($Run.Features -isnot [array] -or @($Run.Features).Count -gt 1) { throw 'Invalid feature recovery inventory.' }
+        foreach ($entry in $Run.Features) {
+            if ($entry.Name -cne 'Recall' -or $entry.Before -cne 'Enabled' -or $entry.After -notin @('Disabled','DisabledWithPayloadRemoved','DisablePending') -or $entry.Status -notin @('Pending','Applied','Restored')) { throw 'Only the saved Recall feature transition can be restored.' }
+        }
+    }
+    $seen=@{}
+    foreach ($entry in $Run.Apps) {
+        if ($entry.Name -notin @(Get-SuiteConsumerAppNames) -or $entry.Package -isnot [string] -or -not $entry.Package.StartsWith($entry.Name+'_',[StringComparison]::Ordinal) -or
+            $entry.Package -match '[\\/:\x00-\x1f]' -or $entry.Status -notin @('Pending','Removed','Restored')) { throw 'Invalid or protected app recovery target.' }
+        if ($seen.ContainsKey($entry.Name)) { throw 'Recovery report contains duplicate app targets.' }; $seen[$entry.Name]=$true
+        $expected=[IO.Path]::GetFullPath((Join-Path $script:SuiteDataRoot ('AppBackups\'+$Run.Id+'\'+$entry.Package))).TrimEnd('\')
+        if ([IO.Path]::GetFullPath($entry.Backup).TrimEnd('\') -ne $expected) { throw 'App backup does not belong to this operation/package.' }
+        if ($entry.PSObject.Properties.Name -contains 'Files') { $null=Get-SuiteAppBackupInventory $entry }
+    }
+}
+function Get-SuiteAppBackupInventory {
+    param($Entry)
+    if ($Entry.Files -isnot [array] -or -not @($Entry.Files).Count -or @($Entry.Files).Count -gt 100000) { throw 'Invalid app backup hash inventory.' }
+    $backup=[IO.Path]::GetFullPath($Entry.Backup).TrimEnd('\')+'\'; $inventory=@{}
+    foreach ($file in $Entry.Files) {
+        if ($file.RelativePath -isnot [string] -or -not $file.RelativePath -or [IO.Path]::IsPathRooted($file.RelativePath) -or $file.RelativePath -match ':' -or $file.Hash -isnot [string] -or $file.Hash -cnotmatch '^[A-F0-9]{64}$') { throw 'Invalid app backup file/hash.' }
+        $copy=[IO.Path]::GetFullPath((Join-Path $backup $file.RelativePath))
+        if (-not $copy.StartsWith($backup,[StringComparison]::OrdinalIgnoreCase) -or $inventory.ContainsKey($copy)) { throw 'Duplicate or escaping app backup file path.' }
+        $inventory[$copy]=$file.Hash
+    }
+    if (-not $inventory.ContainsKey((Join-Path $backup 'AppxManifest.xml'))) { throw 'App backup hash inventory omits its manifest.' }
+    return $inventory
 }
 
 function Get-SuiteActionCatalog {
@@ -246,7 +359,7 @@ function Get-SuiteStartupItems {
 function Get-SuiteAppCatalog {
     # Explicit consumer-app allowlist. Store, Xbox, Gaming Services, WebView,
     # frameworks, drivers and Windows components never enter this list.
-    $names=@('Microsoft.Copilot','Clipchamp.Clipchamp','Microsoft.BingNews','Microsoft.BingWeather','Microsoft.GetHelp','Microsoft.Getstarted','Microsoft.MicrosoftOfficeHub','Microsoft.MicrosoftSolitaireCollection','Microsoft.People','Microsoft.Todos','Microsoft.WindowsFeedbackHub','Microsoft.YourPhone','Microsoft.ZuneMusic','Microsoft.ZuneVideo','MicrosoftCorporationII.MicrosoftFamily')
+    $names=@(Get-SuiteConsumerAppNames)
     foreach ($app in Get-AppxPackage -ErrorAction Stop | Where-Object { $names -contains $_.Name -and -not $_.IsFramework -and -not $_.NonRemovable }) {
         [pscustomobject]@{Id=$app.PackageFullName;Name=$app.Name;Version=[string]$app.Version;Location=$app.InstallLocation;Detail='Optional consumer app. Removal affects this user and its app data; package reinstall is available.'}
     }
@@ -501,9 +614,12 @@ function Get-SuiteHistory {
     $directory=Join-Path $script:SuiteDataRoot 'Runs'
     if (-not (Test-Path -LiteralPath $directory)) { return }
     Assert-SuiteUnlinkedPath $directory
+    Assert-SuiteStatePermissions $script:SuiteDataRoot
+    Assert-SuiteStatePermissions $directory
     foreach ($file in Get-ChildItem -LiteralPath $directory -Filter '*.json' -File | Sort-Object Name -Descending) {
         try {
             Assert-SuiteUnlinkedPath $file.FullName
+            Assert-SuiteStatePermissions $file.FullName
             $run=Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($run.Schema -eq 1 -and $run.Computer -eq $env:COMPUTERNAME -and $run.UserSid -eq (Get-SuiteIdentity)) { $run.Path=$file.FullName; $run }
         } catch { Write-Warning "Unreadable report: $($file.Name)" }
@@ -516,8 +632,13 @@ function Invoke-SuiteUndo {
     $root=[IO.Path]::GetFullPath((Join-Path $script:SuiteDataRoot 'Runs')).TrimEnd('\')+'\'
     if (-not $full.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($full) -ne '.json') { throw 'Select a report from this toolkit history.' }
     Assert-SuiteUnlinkedPath $full
+    Assert-SuiteStatePermissions $script:SuiteDataRoot
+    Assert-SuiteStatePermissions (Split-Path $full -Parent)
+    Assert-SuiteStatePermissions $full
+    if ((Get-Item -LiteralPath $full -ErrorAction Stop).Length -gt 16MB) { throw 'Recovery report is too large.' }
     $run=Get-Content -LiteralPath $full -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($run.Schema -ne 1 -or $run.Computer -ne $env:COMPUTERNAME -or $run.UserSid -ne (Get-SuiteIdentity)) { throw 'This backup belongs to another computer/user or uses an unsupported schema.' }
+    Assert-SuiteUndoJournal $run $full
     if ($run.Status -eq 'Restored') { $run.Message='This operation was already restored. Current settings have been preserved.'; return $run }
     if (-not (@($run.Registry).Count + @($run.Tasks).Count + @($run.Apps).Count) -and
         -not ($run.PSObject.Properties.Name -contains 'Features' -and @($run.Features).Count) -and
@@ -556,13 +677,15 @@ function Invoke-SuiteUndo {
                     Assert-SuiteUnlinkedPath $backup
                     if (@(Get-ChildItem -LiteralPath $backup -Recurse -Force -ErrorAction Stop | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count) { throw 'App backup contains links; use Microsoft Store to reinstall.' }
                     if ($entry.PSObject.Properties.Name -notcontains 'Files' -or -not @($entry.Files).Count) { throw 'Legacy app backup has no saved hashes. Reinstall this app using Microsoft Store.' }
+                    $inventory=Get-SuiteAppBackupInventory $entry
                     $files=@(Get-ChildItem -LiteralPath $backup -Recurse -File -Force -ErrorAction Stop)
-                    if ($files.Count -ne @($entry.Files).Count) { throw 'App backup contents changed; use Microsoft Store to reinstall.' }
-                    foreach ($file in $entry.Files) {
-                        $copy=[IO.Path]::GetFullPath((Join-Path $backup $file.RelativePath))
-                        if (-not $copy.StartsWith($backup,[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid app backup file path.' }
+                    if ($files.Count -ne $inventory.Count) { throw 'App backup contents changed; use Microsoft Store to reinstall.' }
+                    foreach ($file in $files) {
+                        $copy=[IO.Path]::GetFullPath($file.FullName)
+                        if (-not $inventory.ContainsKey($copy)) { throw 'App backup contains an unrecorded file.' }
                         Assert-SuiteUnlinkedPath $copy
-                        if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256 -ErrorAction Stop).Hash -cne $file.Hash) { throw 'App backup hash changed; use Microsoft Store to reinstall.' }
+                        Assert-SuiteStatePermissions $copy
+                        if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256 -ErrorAction Stop).Hash -cne $inventory[$copy]) { throw 'App backup hash changed; use Microsoft Store to reinstall.' }
                     }
                     Add-AppxPackage -Register (Join-Path $entry.Backup 'AppxManifest.xml') -DisableDevelopmentMode -ErrorAction Stop
                 }

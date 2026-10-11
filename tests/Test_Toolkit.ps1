@@ -25,6 +25,10 @@ try {
     }
     Import-Module (Join-Path $root 'Modules\Toolkit.Core.psm1') -ArgumentList (Join-Path $fixture 'State') -Force -DisableNameChecking
     $module=Get-Module Toolkit.Core
+    Initialize-SuiteState
+    $fixtureAcl=New-Object Security.AccessControl.DirectorySecurity
+    $fixtureAcl.SetSecurityDescriptorSddlForm((Get-Acl -LiteralPath (Get-SuiteDataRoot)).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access),[Security.AccessControl.AccessControlSections]::Access)
+    Set-Acl -LiteralPath $fixture -AclObject $fixtureAcl
     # Exercise the real Win32 UInt32 boundary, not a stay-awake mock.
     & $module {
         try {
@@ -105,6 +109,7 @@ try {
         param($key)
         $savedCatalog=(Get-Item Function:Get-SuiteActionCatalog).ScriptBlock
         $savedStartup=(Get-Item Function:Get-SuiteStartupItems).ScriptBlock
+        $savedRemovalPaths=(Get-Item Function:Get-SuiteRegistryRemovalPaths).ScriptBlock
         $savedAdmin=(Get-Item Function:Assert-Administrator).ScriptBlock
         $script:FixtureRegistryKey=$key
         try {
@@ -114,6 +119,7 @@ try {
                 [pscustomobject]@{Id='FailingFixture';Name='Failing fixture';Category='Test';Default=$false;Detail='Injected failure';Targets=@(@{Path=$script:FixtureRegistryKey;Name='Text';Value='partial';Kind='String'},@{Path='NonexistentProvider:\invalid';Name='Blocked';Value=1})}
             }
             function script:Get-SuiteStartupItems { [pscustomobject]@{Id='fixture-startup';Kind='Startup';Name='Fixture startup';Path=$script:FixtureRegistryKey;ValueName='StartupFixture'} }
+            function script:Get-SuiteRegistryRemovalPaths { $script:FixtureRegistryKey }
             Set-RegistryValueExact $key 'StartupFixture' 'original-startup' String
             $combined=Invoke-SuiteRun -ActionIds @('Fixture') -StartupIds @('fixture-startup')
             $combinedCorrect=($combined.Status -eq 'Completed' -and $combined.Registry.Count -eq 2 -and -not (Get-RegistryValueState $key 'StartupFixture').Exists)
@@ -128,6 +134,7 @@ try {
         } finally {
             Set-Item Function:script:Get-SuiteActionCatalog $savedCatalog
             Set-Item Function:script:Get-SuiteStartupItems $savedStartup
+            Set-Item Function:script:Get-SuiteRegistryRemovalPaths $savedRemovalPaths
             Set-Item Function:script:Assert-Administrator $savedAdmin
         }
     } $testKey
@@ -418,7 +425,7 @@ function Invoke-SuiteNative {
     foreach ($server in @($Providers.Quad9.V4)+@($Providers.Quad9.V6)) { Set-DnsClientDohServerAddress $server $Providers.Quad9.Template $false $true }
     function Get-Adapters { [pscustomobject]@{Name='Fixture NIC';ifIndex=7} }
     function Test-AdapterIPv6 { $false }
-    function Get-DnsClientServerAddress { param($InterfaceIndex) [pscustomobject]@{ServerAddresses=@('9.9.9.9','149.112.112.112')} }
+    function Get-DnsClientServerAddress { param($InterfaceIndex) [pscustomobject]@{AddressFamily=2;ServerAddresses=@('9.9.9.9','149.112.112.112')}; [pscustomobject]@{AddressFamily=23;ServerAddresses=@()} }
     function Resolve-DnsName { param($Name,$Type,[switch]$DnsOnly) if ($Type -eq 'TXT') { throw 'Simulated live transport test outage' }; [pscustomobject]@{IPAddress='192.0.2.1'} }
     Check (-not (Test-Configuration Quad9)) 'An unavailable live transport check cannot claim verified encryption'
     # DNS library imports the shared module afresh; rebind its mutation fakes.
@@ -428,6 +435,7 @@ function Invoke-SuiteNative {
     $fixtureGuid=[guid]::NewGuid()
     $legacyDns=[pscustomobject]@{Schema=3;Adapters=@([pscustomobject]@{Name='Original NIC';InterfaceGuid=$fixtureGuid.ToString();InterfaceIndex=7;Automatic=$false;StaticIPv4=@('9.9.9.9');StaticIPv6=@()});Encryption=@();TouchedServers=@();CurrentProvider=$null}
     $legacyPath=Join-Path $fixture 'legacy-dns.json'; Save-SuiteJson $legacyPath $legacyDns
+    $SnapshotRoot=$fixture
     function Get-NetAdapter { [pscustomobject]@{Name='Renamed NIC';InterfaceGuid=$fixtureGuid;ifIndex=99} }
     function Get-StaticDnsServers { param($Adapter) $state=& $network { $script:Families }; [pscustomobject]@{IPv4=@($state[2]);IPv6=@($state[23])} }
     function Clear-DnsClientCache { }
@@ -500,13 +508,18 @@ function Invoke-SuiteNative {
     $privacySource=Join-Path $root 'pc-privacy-guard\PC_Privacy.ps1'
     if (-not (Test-Path -LiteralPath $privacySource)) { $privacySource=Join-Path $root 'Pc Privacy Guard\PC_Privacy.ps1' }
     $privacyAst=[Management.Automation.Language.Parser]::ParseFile($privacySource,[ref]$null,[ref]$null)
-    $privacyDefinitions=@($privacyAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Get-RegState','Set-RegExact','Restore-RegState','Restore-LatestSnapshot')},$false) | ForEach-Object { $_.Extent.Text }) -join "`n"
+    $privacyDefinitions=@($privacyAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Get-RegState','Set-RegExact','Restore-RegState','Restore-LatestSnapshot','Assert-PrivacyStatePath','Assert-PrivacyRegistryState','Assert-PrivacySnapshot')},$false) | ForEach-Object { $_.Extent.Text }) -join "`n"
     $privacyChecks=& {
         param($definitions,$key,$fixture)
         Invoke-Expression $definitions
         function Assert-Admin { }
         function Initialize-State { }
         function Get-LatestSnapshot { Join-Path $fixture 'privacy.json' }
+        $SnapshotRoot=$fixture
+        function Get-PrivacyTargets { @{P=$key;N='Expanded'} }
+        function Get-PrivacyServiceTargets { 'FixtureService' }
+        function Get-TaskTargets { @() }
+        function Get-CimInstance { [pscustomobject]@{Name='FixtureService';StartMode='Auto';State='Stopped'} }
         $script:FixturePrivacySuccess=$false
         function Write-Status { param($Kind,$Message) if ($Kind -eq 'OK') { $script:FixturePrivacySuccess=$true } }
         $before=Get-RegState $key 'Expanded'
@@ -524,7 +537,7 @@ function Invoke-SuiteNative {
     } $privacyDefinitions $testKey $fixture
     Check $privacyChecks.Typed 'Privacy undo verifies exact registry type and literal environment value'
     Check $privacyChecks.Failed 'Privacy undo exposes service restore failure instead of claiming exact success'
-    $aiDefinitions=@($fixerAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Get-AiRegistryEntryState','Restore-AiFeatureSnapshot')},$false) | ForEach-Object { $_.Extent.Text }) -join "`n"
+    $aiDefinitions=@($fixerAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -in @('Get-AiRegistryEntryState','Restore-AiFeatureSnapshot','Assert-FixerUnlinkedPath')},$false) | ForEach-Object { $_.Extent.Text }) -join "`n"
     $aiChecks=& {
         param($definitions,$key,$fixture)
         Invoke-Expression $definitions

@@ -11,7 +11,8 @@ function Get-AdapterStaticDnsServers {
         if (-not (Test-Path -LiteralPath $path -ErrorAction Stop)) { continue }
         $key=Get-Item -LiteralPath $path -ErrorAction Stop
         if ($key.GetValueNames() -notcontains 'NameServer') { continue }
-        $raw=@($key.GetValue('NameServer',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)) -join ','
+        # Windows can pad NameServer REG_SZ values with trailing NULs.
+        $raw=(@($key.GetValue('NameServer',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)) -join ',').TrimEnd([char]0)
         $result[$family]=@($raw -split '[,;\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     }
     [pscustomobject]$result
