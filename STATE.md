@@ -2,28 +2,34 @@
 
 ## Current milestone
 
-3.0.2 final safety cross-audit is integrated, not yet released. Baseline: clean main `5a3fb95e08678ea03b2cd7e73e147415ad560d30`; last public release 3.0.1 at `f9459671921716a5bfe06a69964b105d2f5ce6ac`. Preserve the current git diff. Findings are in docs/AUDIT_2026-10-11.md; no feature expansion or dependencies were added.
+Windows PC Toolkit 3.0.2 is published as GitHub's Latest stable release and independently verified in the local friendly layout. The final whole-kit safety audit is complete. No feature expansion or runtime dependency was added. Findings: docs/AUDIT_2026-10-11.md; coverage and limits: VALIDATION_REPORT.md.
 
-The final integrated native gate passed 583 assertions on this nonadministrative host: base 116, Suite 48, Cleaner 57, DNS/privacy 99, repair/gaming 49, launchers 125, final gaming 24, final Fixer 65. Administrative CI tokens omit 12 fixture-only principal-gate checks and report 571. Static validation passes on 45 PowerShell files. Actual WPF 3.0.2 screenshot rendered and visually inspected. VALIDATION_REPORT.md records the final counts and coverage.
+Release commit: `d8d263012bcc55e92c2081e89444f1532cd847d8` (annotated tag `v3.0.2`). [Public release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.2). Exact-commit [CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/runs/38183368793) and [Actions analysis](https://github.com/SenjuWoo/windows-pc-toolkit/actions/runs/38183368698) completed successfully. Analysis covers Actions, not the PowerShell implementation. Dependabot, code-scanning and secret-scanning open alerts were independently queried after publication: zero in each category. Unavailable code quality remains off.
 
-Read-only native DNS capture found trailing NUL padding in registry NameServer values. Shared capture now trims terminator padding; the native schema-4 capture passes with configuration unchanged. DNS/Fixer restore normalizes that same historical padding, rejects embedded corruption, and passes focused fixtures. All component edits are frozen. Private evidence and Build-Release.ps1 / Verify-Published.ps1 / Sync-Release.ps1 helpers are in the adjacent Toolkit-final-audit-2026-10-11 folder.
+## Verified evidence
 
-Remaining gates: commit/push, exact-SHA green CI plus all three GitHub alert queries, extracted payload/Git-blob/native checks, tag/release/public downloads, verified backup + local friendly-layout sync, installed native/static/hash checks, final handoff. Private release helpers take ExpectedChecks=583. No live optimization, debloat, DNS change, repair, servicing or app removal has been applied.
+- Native Windows PowerShell 5.1 STA passed 583 assertions in the source, extracted release and actual installed friendly layout. Counts: base 116, Suite 48, Cleaner 57, DNS/privacy 99, repair/gaming 49, launchers 125, final gaming 24 and final Fixer 65. Hosted administrative CI passed 571 assertions in each canonical/friendly layout; 12 fixture-only principal checks are omitted there.
+- Static validation passed on 45 PowerShell files. Actual WPF 3.0.2 screenshot was rendered and visually inspected. Real repair controls/process orchestration and stay-awake P/Invoke were exercised with harmless executables.
+- Native read-only DNS capture exposed trailing registry NUL padding. Capture and historical DNS/Fixer recovery now handle only trailing padding; malformed fields and embedded corruption remain refused. Before/after adapter DNS and DoH configuration matched. The existing Suite state root also passed the new ownership/permissions checks.
+- The build verified all 86 source files and all 66 payload files against the release commit's Git blobs. The extracted payload passed native/static gates and payload-only read-only CLI preview.
+- All three public assets were freshly downloaded and matched local size, SHA-256 and GitHub digest. ZIP: 285924 bytes, SHA-256 `3e6aa7ac39a7f354b72f5e57ae3c7077fb782e9f978da3ab2fe245e6c56d208b`. Attached release-provenance.json identifies the exact commit and CI runs.
+- The local upgrade verified and backed up all 75 prior owned files, previous release assets and prior verification manifest before writing. After installed tests, all 79 current owned files and three release assets matched their expected hashes. Independent optimizerDuck and unrelated user-owned files/releases were preserved. Installed verification: `_github_publish/installed-3.0.2-audit-verification.json`, status `VerifiedInstalledAndPublished`, 583 checks. The original source checkout is fast-forwarded separately; its current SHA is recorded in that private manifest.
+
+Private logs, source/archive extraction and release helpers remain in the adjacent Toolkit-final-audit-2026-10-11 folder. This STATE-only source handoff follows the release commit and does not change published or installed payload bytes.
 
 ## Resume contract
 
-- Read this file and git status before writing; preserve unrelated edits, user data, previous releases and independent optimizerDuck.
-- Use native Windows PowerShell 5.1 STA for tests/Test_All.ps1; run Validate_All.ps1. Mutating Windows commands must remain intercepted or confined to owned HKCU/TEMP fixtures.
-- Push first; exact release SHA must pass canonical/friendly CI and analysis. Query Dependabot, code-scanning and secret-scanning alerts independently. Actions analysis does not scan PowerShell implementation code; unavailable code quality stays off.
-- Build from the green clean commit, compare all extracted files to Git blobs, run actual package tests and payload-only preview, publish and freshly download every asset to compare size/SHA-256/GitHub digest.
-- Before local sync, verify all old manifest files and old public assets; back them up and hash-check the backup. Preserve user-owned files, prior backups and optimizerDuck. Verify the installed copy independently.
+- Read this file and git status before writing. Preserve unrelated edits, user data, previous releases/backups and independent optimizerDuck.
+- Use native Windows PowerShell 5.1 STA for tests/Test_All.ps1 and run Validate_All.ps1. Mutating Windows commands must remain intercepted or confined to owned HKCU/TEMP fixtures. Never infer live repair success from fixture results.
+- Future releases: push first, require successful checks on the exact SHA, query all three GitHub alert categories, build from that clean commit, compare extracted Git blobs, test the package, publish and freshly download/hash-check every asset.
+- Before a local upgrade, verify the existing manifest and release assets, back them up and hash-check the backup. Verify the actual installed copy independently.
 
-## Last known good release
+## Last known good backup
 
-[3.0.1 public release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.1): commit f9459671921716a5bfe06a69964b105d2f5ce6ac, ZIP SHA-256 79C6565F08EFE09CAD4D478E505A77533DF8FF4979A0A04529F45CD3FDF05BDF. Source handoff/main is 5a3fb95e08678ea03b2cd7e73e147415ad560d30. Its three assets were publicly downloaded/hash-verified, and the installed manifest records 75 owned files with 408 native checks. The original source checkout and independent companion were verified unchanged at this audit's start. Keep 3.0.1 and its backups.
+3.0.1 remains available at its [public release](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.1): commit `f9459671921716a5bfe06a69964b105d2f5ce6ac`, ZIP SHA-256 `79c6565f08efe09cad4d478e505a77533df8ff4979a0a04529f45cd3fdf05bdf`. The local release-3.0.2 upgrade backup contains its 75 owned files and old assets; older pre-audit and 3.0.1 backups remain intact. Keep these for rollback.
 
 ## Boundaries and diagnostics
 
-No live Windows mutation or FPS certification. Interactive UAC and live repair, AppX/Recall/provider outcomes remain untested. Run one component operation at a time; advanced snapshot restore can replace later manual changes. Unsafe old cleaner file/whole-key imports are retired while their backups remain for manual recovery. Deleted cache/app data is not restored by the journals.
+No live optimization, debloat, DNS change, Windows repair, servicing, app removal or FPS certification was performed. Interactive UAC and live repair, AppX/Recall/provider outcomes remain untested. Run one component operation at a time; advanced snapshot restore can replace later manual changes. Unsafe old cleaner file/whole-key imports are retired while their backups remain for manual recovery. Deleted cache/app data is not restored by journals.
 
 Diagnostics: %LOCALAPPDATA%\WindowsPCToolkit\Logs; detailed logging via -DebugLog or WINDOWS_PC_TOOLKIT_DEBUG=1. Reports/recovery journals remain under %ProgramData%\WindowsPCToolkit.
