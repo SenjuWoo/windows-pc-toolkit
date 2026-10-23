@@ -31,7 +31,7 @@
     </Style>
     <Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style>
     <Style x:Key="Heading" TargetType="TextBlock"><Setter Property="FontSize" Value="28"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,0,0,8"/></Style>
-    <Style x:Key="Description" TargetType="TextBlock"><Setter Property="Foreground" Value="#A9B7CE"/><Setter Property="Margin" Value="0,0,0,18"/><Setter Property="LineHeight" Value="22"/></Style>
+    <Style x:Key="Description" TargetType="TextBlock"><Setter Property="Foreground" Value="#A9B7CE"/><Setter Property="Margin" Value="0,0,0,18"/><Setter Property="LineHeight" Value="22"/><Setter Property="TextWrapping" Value="Wrap"/></Style>
     <Style TargetType="CheckBox"><Setter Property="Foreground" Value="#E7ECF5"/><Setter Property="FontSize" Value="15"/><Setter Property="Margin" Value="0,0,0,6"/></Style>
   </Window.Resources>
   <Grid Background="#10151E">
@@ -40,7 +40,7 @@
       <DockPanel LastChildFill="True">
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,30">
           <TextBlock Text="PC TOOLKIT" FontWeight="Bold" FontSize="21"/>
-          <TextBlock Text="Windows · v3.0.2" Foreground="#7E94B2" Margin="0,8,0,0"/>
+          <TextBlock Text="Windows · v3.1.0" Foreground="#7E94B2" Margin="0,8,0,0"/>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom">
           <TextBlock Text="Portable. Local. No account." Foreground="#7E94B2" FontSize="12" Margin="0,0,0,12"/>
@@ -49,6 +49,7 @@
         </StackPanel>
         <StackPanel>
           <Button Name="NavOptimize" Content="Optimize" Style="{StaticResource Navigation}" Background="#315FA0"/>
+          <Button Name="NavOneDrive" Content="OneDrive folders" Style="{StaticResource Navigation}"/>
           <Button Name="NavStartup" Content="Startup &amp; tasks" Style="{StaticResource Navigation}"/>
           <Button Name="NavApps" Content="App debloat" Style="{StaticResource Navigation}"/>
           <Button Name="NavDns" Content="Encrypted DNS" Style="{StaticResource Navigation}"/>
@@ -63,10 +64,11 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel>
           <TextBlock Text="Optimize Windows for gaming" Style="{StaticResource Heading}"/>
-          <TextBlock Text="One-click gaming, cleanup, registry repair and Copilot/consumer debloat. Preview or customize before applying." Style="{StaticResource Description}"/>
+          <TextBlock Text="One-click gaming, cleanup, registry repair and Copilot/consumer debloat. On a new Windows install, settle OneDrive folders before you remove anything." Style="{StaticResource Description}"/>
           <Border Background="#19283D" Padding="16,12" CornerRadius="7" Margin="0,0,0,18">
             <StackPanel>
               <TextBlock Name="HardwareText" Text="Windows 10/11 · Hardware details load after startup" FontWeight="SemiBold"/>
+              <TextBlock Name="OneDriveBanner" Text="Checking whether Desktop, Documents, Pictures, Music and Videos are on this PC." Foreground="#F0C674" Margin="0,8,0,0"/>
               <TextBlock Text="Update services, security, Store, Xbox, game dependencies and drivers stay available." Foreground="#9FB5D2" Margin="0,6,0,0"/>
             </StackPanel>
           </Border>
@@ -81,6 +83,35 @@
           <CheckBox Name="IncludeReviewed" Content="Also apply my selected startup entries and app removals" IsChecked="False" ToolTip="Select rows in Startup and App debloat first. They can be included in this same one-click operation and recovery report."/>
           <TextBlock Text="App removals are named before confirmation. Package/settings backups support undo; deleted app data, Recall snapshots and temp files are not restored." Foreground="#7E94B2" FontSize="12"/>
         </StackPanel>
+      </Grid>
+      <Grid Name="OneDrivePage" Visibility="Collapsed">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+          <TextBlock Text="Keep folders on this PC" Style="{StaticResource Heading}"/>
+          <TextBlock Grid.Row="1" Text="Sign in to OneDrive and choose Only on my PC for Desktop, Documents, Pictures, Music and Videos before you uninstall it. Uninstalling first leaves those paths pointing at OneDrive. This page does not delete files." Style="{StaticResource Description}"/>
+          <TextBlock Grid.Row="2" Name="OneDriveSummary" Text="Open this page to read the current folder locations." Foreground="#D7E4F7" Margin="0,0,0,12"/>
+        </Grid>
+        <StackPanel Grid.Row="1" Margin="0,0,0,18">
+          <StackPanel Orientation="Horizontal">
+            <Button Name="RefreshOneDrive" Content="Refresh status"/>
+            <Button Name="OpenWindowsBackup" Content="Open Windows backup"/>
+            <Button Name="OpenOneDriveApp" Content="Open OneDrive"/>
+            <Button Name="LockFolders" Content="Lock folders to this PC" Background="#68A8FF" Foreground="#10151E"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+            <Button Name="UninstallOneDrive" Content="Uninstall in Installed apps" IsEnabled="False"/>
+            <Button Name="RestoreOneDriveFolders" Content="Restore local locations" IsEnabled="False"/>
+          </StackPanel>
+        </StackPanel>
+        <DataGrid Grid.Row="2" Name="OneDriveGrid" SelectionMode="Single">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="Folder" Binding="{Binding Folder}" Width="110"/>
+            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="200"/>
+            <DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="*" MinWidth="280"/>
+            <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="160"/>
+          </DataGrid.Columns>
+        </DataGrid>
       </Grid>
       <Grid Name="StartupPage" Visibility="Collapsed">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>

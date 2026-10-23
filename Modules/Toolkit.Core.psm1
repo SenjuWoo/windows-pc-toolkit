@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 $script:SuiteRoot=Split-Path $PSScriptRoot -Parent
 $script:SuiteDataRoot=$DataRoot
-$script:SuiteVersion='3.0.2'
+$script:SuiteVersion='3.1.0'
 
 function Write-SuiteDiagnostic {
     param([string]$Operation,[string]$Message,[string]$Level='Debug',[string]$RunId)
@@ -241,6 +241,8 @@ function Get-SuiteAppBackupInventory {
 
 function Get-SuiteActionCatalog {
     @(
+        [pscustomobject]@{Id='KeepLocalFolders';Name='Keep Desktop and Documents on this PC';Category='OneDrive';Default=$true;Detail='Block OneDrive from taking Desktop, Documents and Pictures (policy KFMBlockOptIn). Refuses while those folders still point at OneDrive. Does not move or delete files, and does not uninstall OneDrive.';Targets=@(
+            @{Path='HKLM:\SOFTWARE\Policies\Microsoft\OneDrive';Name='KFMBlockOptIn';Value=1})},
         [pscustomobject]@{Id='GameMode';Name='Windows Game Mode';Category='Gaming';Default=$true;Detail='Enable Windows gaming scheduling. Keep GPU, drivers and fullscreen settings.';Targets=@(
             @{Path='HKCU:\Software\Microsoft\GameBar';Name='AllowAutoGameMode';Value=1},
             @{Path='HKCU:\Software\Microsoft\GameBar';Name='AutoGameModeEnabled';Value=1})},
@@ -407,6 +409,7 @@ function Get-SuitePreview {
             $apps=@(Get-SuiteAppCatalog)
             $details+=' Installed: '+$(if ($apps.Count) { @($apps.Name) -join ', ' } else { 'None' })
         }
+        if ($id -eq 'KeepLocalFolders') { $details+=' '+$(Get-SuiteOneDriveReport).Summary }
         [pscustomobject]@{Action=$action.Name;Category=$action.Category;Details=$details;Changes=@($action.Targets).Count}
     }
     if ($StartupIds.Count) {
@@ -461,6 +464,11 @@ function Invoke-SuiteRun {
                 if ($action.PSObject.Properties.Name -contains 'MinBuild') {
                     $build=[int](Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).BuildNumber
                     if ($build -lt $action.MinBuild) { Add-SuiteStep $run $action.Name 'Skipped' "Requires Windows build $($action.MinBuild) or newer."; continue }
+                }
+                if ($id -eq 'KeepLocalFolders') {
+                    $null=Invoke-SuiteKnownFolderLock -Run $run
+                    Add-SuiteStep $run $action.Name 'Applied' 'Known folders stay on this PC. OneDrive cannot take Desktop, Documents and Pictures. No files were moved or deleted.'
+                    continue
                 }
                 foreach ($target in $action.Targets) {
                     $kind=if ($target.ContainsKey('Kind')) { $target.Kind } else { 'DWord' }
@@ -627,7 +635,6 @@ function Get-SuiteHistory {
 }
 function Invoke-SuiteUndo {
     param([string]$Path)
-    Assert-Administrator
     $full=[IO.Path]::GetFullPath($Path)
     $root=[IO.Path]::GetFullPath((Join-Path $script:SuiteDataRoot 'Runs')).TrimEnd('\')+'\'
     if (-not $full.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($full) -ne '.json') { throw 'Select a report from this toolkit history.' }
@@ -638,6 +645,8 @@ function Invoke-SuiteUndo {
     if ((Get-Item -LiteralPath $full -ErrorAction Stop).Length -gt 16MB) { throw 'Recovery report is too large.' }
     $run=Get-Content -LiteralPath $full -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($run.Schema -ne 1 -or $run.Computer -ne $env:COMPUTERNAME -or $run.UserSid -ne (Get-SuiteIdentity)) { throw 'This backup belongs to another computer/user or uses an unsupported schema.' }
+    if ($run.Mode -eq 'OneDriveFolders') { throw 'OneDrive folder locations are not put back. The report lists the old paths. No files were deleted.' }
+    Assert-Administrator
     Assert-SuiteUndoJournal $run $full
     if ($run.Status -eq 'Restored') { $run.Message='This operation was already restored. Current settings have been preserved.'; return $run }
     if (-not (@($run.Registry).Count + @($run.Tasks).Count + @($run.Apps).Count) -and
@@ -744,6 +753,226 @@ function Invoke-SuiteRepair {
     } finally {
         try { Disable-StayAwake } catch { Write-Warning $_.Exception.Message }
         finally { $lock.ReleaseMutex(); $lock.Dispose() }
+    }
+}
+
+# OneDrive known-folder gate. Folder backup must be "Only on my PC" before
+# uninstall, or Desktop/Documents/Pictures/Music/Videos keep the OneDrive path.
+function Get-SuiteKnownFolderCatalog {
+    @(
+        [pscustomobject]@{Folder='Desktop';ValueName='Desktop';Relative='Desktop'},
+        [pscustomobject]@{Folder='Documents';ValueName='Personal';Relative='Documents'},
+        [pscustomobject]@{Folder='Pictures';ValueName='My Pictures';Relative='Pictures'},
+        [pscustomobject]@{Folder='Music';ValueName='My Music';Relative='Music'},
+        [pscustomobject]@{Folder='Videos';ValueName='My Video';Relative='Videos'}
+    )
+}
+function Get-SuiteOneDriveAccountRoots {
+    $roots=@()
+    $key='HKCU:\Software\Microsoft\OneDrive\Accounts'
+    if (-not (Test-Path -LiteralPath $key)) { return @() }
+    foreach ($account in @(Get-ChildItem -LiteralPath $key -ErrorAction Stop)) {
+        $value=(Get-Item -LiteralPath $account.PSPath -ErrorAction Stop).GetValue('UserFolder')
+        if ($value -is [string] -and $value.Trim()) { $roots+=$value.Trim() }
+    }
+    return @($roots)
+}
+function Get-SuiteOneDriveExecutable {
+    $candidates=New-Object Collections.Generic.List[string]
+    [void]$candidates.Add((Join-Path $env:LOCALAPPDATA 'Microsoft\OneDrive\OneDrive.exe'))
+    if ($env:ProgramFiles) { [void]$candidates.Add((Join-Path $env:ProgramFiles 'Microsoft OneDrive\OneDrive.exe')) }
+    $programFilesX86=[Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    if ($programFilesX86) { [void]$candidates.Add((Join-Path $programFilesX86 'Microsoft OneDrive\OneDrive.exe')) }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+    return ''
+}
+function Test-SuiteOneDrivePath {
+    param([string]$Expanded,[string[]]$Roots)
+    if (-not $Expanded) { return $false }
+    $full=$Expanded.TrimEnd('\')
+    foreach ($root in @($Roots)) {
+        if (-not $root) { continue }
+        $prefix=$root.TrimEnd('\')
+        if ($full.Equals($prefix,[StringComparison]::OrdinalIgnoreCase) -or $full.StartsWith($prefix+'\',[StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    foreach ($segment in $full.Split('\')) {
+        if ($segment -match '^(?i)OneDrive($| - .+)$') { return $true }
+    }
+    return $false
+}
+function Test-SuiteCloudOnlyAttribute {
+    param([int]$Attributes)
+    # Win32 FILE_ATTRIBUTE_RECALL_ON_OPEN and FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.
+    return (($Attributes -band 0x40000) -ne 0) -or (($Attributes -band 0x400000) -ne 0)
+}
+function Get-SuiteCloudOnlyCount {
+    param([string]$Path,[int]$Limit=2000)
+    $count=0; $seen=0; $capped=$false
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return [pscustomobject]@{Count=0;Capped=$false} }
+    $rootItem=Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { return [pscustomobject]@{Count=0;Capped=$false} }
+    $pending=New-Object Collections.Generic.Queue[string]
+    $pending.Enqueue($Path)
+    while ($pending.Count -gt 0 -and -not $capped) {
+        $directory=$pending.Dequeue()
+        try { $entries=@(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop) } catch { continue }
+        foreach ($entry in $entries) {
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+            if ($entry.PSIsContainer) { $pending.Enqueue($entry.FullName); continue }
+            $seen++
+            if (Test-SuiteCloudOnlyAttribute ([int]$entry.Attributes)) { $count++ }
+            if ($seen -ge $Limit) { $capped=$true; break }
+        }
+    }
+    [pscustomobject]@{Count=$count;Capped=$capped}
+}
+function Get-SuiteFolderClass {
+    param([string]$Raw,[string]$ProfilePath,[string]$Relative,[string[]]$Roots)
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return 'Missing' }
+    $expanded=[Environment]::ExpandEnvironmentVariables($Raw).TrimEnd('\')
+    $default=(Join-Path $ProfilePath $Relative).TrimEnd('\')
+    if ($expanded.Equals($default,[StringComparison]::OrdinalIgnoreCase)) { return 'Local' }
+    if (Test-SuiteOneDrivePath $expanded $Roots) { return 'OneDrive' }
+    return 'Custom'
+}
+function Get-SuiteOneDriveReport {
+    param(
+        [string]$UserShellKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+        [string]$ShellKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders',
+        [string]$PolicyKey='HKLM:\SOFTWARE\Policies\Microsoft\OneDrive',
+        [string]$ProfilePath=$env:USERPROFILE,
+        [string[]]$OneDriveRoots,
+        [string]$OneDriveExecutable,
+        [switch]$CountCloudOnly,
+        [int]$CloudLimit=2000
+    )
+    if (-not $PSBoundParameters.ContainsKey('OneDriveRoots')) { $OneDriveRoots=@(Get-SuiteOneDriveAccountRoots) }
+    if (-not $PSBoundParameters.ContainsKey('OneDriveExecutable')) { $OneDriveExecutable=[string](Get-SuiteOneDriveExecutable) }
+    $useEnvironment=[string]::Equals($ProfilePath.TrimEnd('\'),$env:USERPROFILE.TrimEnd('\'),[StringComparison]::OrdinalIgnoreCase)
+    $folders=New-Object Collections.Generic.List[object]
+    foreach ($known in @(Get-SuiteKnownFolderCatalog)) {
+        $userState=Get-RegistryValueState -Path $UserShellKey -Name $known.ValueName
+        $shellState=Get-RegistryValueState -Path $ShellKey -Name $known.ValueName
+        $userRaw=$(if ($userState.Exists) { [string]$userState.Value } else { '' })
+        $shellRaw=$(if ($shellState.Exists) { [string]$shellState.Value } else { '' })
+        $userClass=Get-SuiteFolderClass $userRaw $ProfilePath $known.Relative $OneDriveRoots
+        $shellClass=Get-SuiteFolderClass $shellRaw $ProfilePath $known.Relative $OneDriveRoots
+        $location=$(if ($userRaw) { [Environment]::ExpandEnvironmentVariables($userRaw) } else { '' })
+        $cloud=[pscustomobject]@{Count=0;Capped=$false}
+        if ($CountCloudOnly -and $userClass -eq 'OneDrive' -and $location) { $cloud=Get-SuiteCloudOnlyCount -Path $location -Limit $CloudLimit }
+        $status=switch ($userClass) {
+            'Local' { if ($shellClass -eq 'OneDrive') { 'Explorer cache still points at OneDrive' } else { 'On this PC' } }
+            'Custom' { if ($shellClass -eq 'OneDrive') { 'Explorer cache still points at OneDrive' } else { 'On this PC (custom folder)' } }
+            'OneDrive' { 'Still in OneDrive' }
+            default { 'Not recorded' }
+        }
+        $note=''
+        if ($cloud.Count -gt 0) { $note="$($cloud.Count) online-only file(s). Right-click the folder and choose Always keep on this device, then turn backup off again." }
+        if ($cloud.Capped) { $note=($note+' Scan stopped after the file limit.').Trim() }
+        [void]$folders.Add([pscustomobject]@{
+            Folder=$known.Folder; ValueName=$known.ValueName; Location=$location; Status=$status; Note=$note
+            UserClass=$userClass; ShellClass=$shellClass
+            DefaultPath=(Join-Path $ProfilePath $known.Relative)
+            DefaultExpand=$(if ($useEnvironment) { '%USERPROFILE%\'+$known.Relative } else { (Join-Path $ProfilePath $known.Relative) })
+        })
+    }
+    $redirected=@($folders | Where-Object { $_.UserClass -eq 'OneDrive' -or $_.ShellClass -eq 'OneDrive' })
+    $missing=@($folders | Where-Object { $_.UserClass -eq 'Missing' })
+    $optOut=$false; $silent=$false; $wizard=$false; $locked=$false
+    if (Test-Path -LiteralPath $PolicyKey) {
+        $optOutState=Get-RegistryValueState -Path $PolicyKey -Name 'KFMBlockOptOut'
+        $optOut=$optOutState.Exists -and $optOutState.Kind -in @('DWord','QWord') -and [int64]$optOutState.Value -eq 1
+        $silentState=Get-RegistryValueState -Path $PolicyKey -Name 'KFMSilentOptIn'
+        $silent=$silentState.Exists -and $silentState.Value -is [string] -and [bool]$silentState.Value.Trim()
+        $wizardState=Get-RegistryValueState -Path $PolicyKey -Name 'KFMOptInWithWizard'
+        $wizard=$wizardState.Exists -and $wizardState.Value -is [string] -and [bool]$wizardState.Value.Trim()
+        $lockState=Get-RegistryValueState -Path $PolicyKey -Name 'KFMBlockOptIn'
+        $locked=$lockState.Exists -and $lockState.Kind -in @('DWord','QWord') -and [int64]$lockState.Value -eq 1
+    }
+    $safe=(-not $redirected.Count -and -not $missing.Count)
+    $policyBlock=''
+    if ($redirected.Count) { $policyBlock='Still pointing at OneDrive: '+((@($redirected.Folder) | Select-Object -Unique) -join ', ')+'. Sign in to OneDrive first. In Settings, Accounts, Windows backup, or in OneDrive Settings, Sync and backup, Manage backup, turn each folder off and choose Only on my PC. Do this before uninstalling OneDrive, or the old paths stay behind. Nothing was changed.' }
+    elseif ($missing.Count) { $policyBlock='Windows has no location recorded for: '+(@($missing.Folder) -join ', ')+'. Nothing was changed.' }
+    elseif ($optOut) { $policyBlock='Policy KFMBlockOptOut is forcing known folders to stay in OneDrive, so the backup toggles cannot move them back. Nothing was changed.' }
+    elseif ($silent -or $wizard) { $policyBlock='Policy KFMSilentOptIn or KFMOptInWithWizard is set to move folders into OneDrive. Microsoft says the local lock does not apply while that policy is on. Nothing was changed.' }
+    $policyAllowed=[string]::IsNullOrEmpty($policyBlock)
+    $appInstalled=[bool]$OneDriveExecutable
+    $uninstallAllowed=$safe -and $appInstalled
+    $restoreAllowed=(-not $appInstalled) -and [bool]$redirected.Count
+    $uninstallBlock=$(if ($uninstallAllowed) { '' } elseif (-not $safe) { $policyBlock } else { 'OneDrive is not installed, and the folders are already on this PC. No files were deleted.' })
+    $restoreBlock=$(if ($restoreAllowed) { '' } elseif ($appInstalled) { 'OneDrive is still installed. Use the backup toggles and choose Only on my PC. Folder locations are not rewritten while OneDrive can put them back.' } else { 'No folder still points at OneDrive. Nothing was changed.' })
+    $summary=$(if ($policyBlock -and $redirected.Count) { $policyBlock }
+        elseif ($policyBlock) { $policyBlock }
+        elseif ($locked -and -not $appInstalled) { 'Desktop, Documents, Pictures, Music and Videos are on this PC. OneDrive is not installed, and KFMBlockOptIn already stops it from taking those folders.' }
+        elseif ($locked) { 'Folders are on this PC and OneDrive is blocked from taking them. Uninstall Microsoft OneDrive from Installed apps only now. The toolkit does not delete files.' }
+        elseif ($appInstalled) { 'Folders are on this PC. Lock them before a later OneDrive sign-in can take Desktop, Documents and Pictures. Uninstall OneDrive only after the lock, from Installed apps.' }
+        else { 'Folders are on this PC and OneDrive is not installed. Lock them so a later install cannot take Desktop, Documents and Pictures.' })
+    # Windows PowerShell 5.1 rejects a pscustomobject cast when one property is an array of objects.
+    $report=New-Object psobject
+    $report | Add-Member NoteProperty Folders @($folders.ToArray())
+    $report | Add-Member NoteProperty Summary $summary
+    $report | Add-Member NoteProperty PolicyAllowed $policyAllowed
+    $report | Add-Member NoteProperty PolicyBlock $policyBlock
+    $report | Add-Member NoteProperty UninstallAllowed $uninstallAllowed
+    $report | Add-Member NoteProperty UninstallBlock $uninstallBlock
+    $report | Add-Member NoteProperty RestoreAllowed $restoreAllowed
+    $report | Add-Member NoteProperty RestoreBlock $restoreBlock
+    $report | Add-Member NoteProperty AppInstalled $appInstalled
+    $report | Add-Member NoteProperty PolicyLocked $locked
+    return $report
+}
+function Invoke-SuiteKnownFolderLock {
+    param($Run,
+        [string]$UserShellKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+        [string]$ShellKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders',
+        [string]$PolicyKey='HKLM:\SOFTWARE\Policies\Microsoft\OneDrive',
+        [string]$ProfilePath=$env:USERPROFILE,
+        [string[]]$OneDriveRoots,
+        [string]$OneDriveExecutable)
+    $parameters=@{}
+    foreach ($name in @('UserShellKey','ShellKey','PolicyKey','ProfilePath','OneDriveRoots','OneDriveExecutable')) {
+        if ($PSBoundParameters.ContainsKey($name)) { $parameters[$name]=$PSBoundParameters[$name] }
+    }
+    $report=Get-SuiteOneDriveReport @parameters
+    if (-not $report.PolicyAllowed) { throw $report.PolicyBlock }
+    Set-SuiteRegistry -Run $Run -Path $PolicyKey -Name 'KFMBlockOptIn' -Value 1 -Kind 'DWord'
+    return $report
+}
+function Invoke-SuiteOneDriveFolderRestore {
+    param(
+        [string]$UserShellKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+        [string]$ShellKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders',
+        [string]$PolicyKey='HKLM:\SOFTWARE\Policies\Microsoft\OneDrive',
+        [string]$ProfilePath=$env:USERPROFILE,
+        [string[]]$OneDriveRoots,
+        [string]$OneDriveExecutable)
+    $parameters=@{}
+    foreach ($name in @('UserShellKey','ShellKey','PolicyKey','ProfilePath','OneDriveRoots','OneDriveExecutable')) {
+        if ($PSBoundParameters.ContainsKey($name)) { $parameters[$name]=$PSBoundParameters[$name] }
+    }
+    $report=Get-SuiteOneDriveReport @parameters
+    if (-not $report.RestoreAllowed) { throw $report.RestoreBlock }
+    $run=New-SuiteRun 'OneDriveFolders'
+    $written=0
+    try {
+        foreach ($folder in @($report.Folders)) {
+            if ($folder.UserClass -eq 'OneDrive') { Set-SuiteRegistry -Run $run -Path $UserShellKey -Name $folder.ValueName -Value $folder.DefaultExpand -Kind 'ExpandString'; $written++ }
+            if ($folder.ShellClass -eq 'OneDrive') { Set-SuiteRegistry -Run $run -Path $ShellKey -Name $folder.ValueName -Value $folder.DefaultPath -Kind 'String'; $written++ }
+        }
+        if ($written -lt 1) { throw 'No OneDrive folder location remained to correct.' }
+        $run.Status='Completed'
+        $run.Message='Folder locations that still pointed at OneDrive now use this PC. Files were not deleted or moved. Sign out so Explorer refreshes, then move anything left in the old OneDrive folder yourself. This report is not undone, because putting the OneDrive path back is the broken state.'
+        Save-SuiteJson $run.Path $run
+        return $run
+    } catch {
+        $failure=$_.Exception.Message
+        for ($index=$run.Registry.Count-1; $index -ge 0; $index--) {
+            try { Undo-SuiteRegistryEntry $run.Registry[$index] } catch { $failure+=' Rollback: '+$_.Exception.Message }
+        }
+        $run.Status='Failed'; $run.Message=$failure; Save-SuiteJson $run.Path $run
+        throw $failure
     }
 }
 

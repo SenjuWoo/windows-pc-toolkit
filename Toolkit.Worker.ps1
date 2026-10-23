@@ -19,6 +19,8 @@ try {
         'Startup' { $data=@(Get-SuiteStartupItems); $message="$($data.Count) startup entries and third-party startup tasks found." }
         'DisableStartup' { $report=Invoke-SuiteStartupDisable -Ids @($request.Ids) }
         'Apps' { $data=@(Get-SuiteAppCatalog); $message="$($data.Count) optional consumer apps found." }
+        'OneDrive' { $data=Get-SuiteOneDriveReport -CountCloudOnly; $message=$data.Summary }
+        'RestoreOneDriveFolders' { $report=Invoke-SuiteOneDriveFolderRestore; $message=$report.Message }
         'RemoveApps' { $report=Invoke-SuiteAppRemoval -Ids @($request.Ids) }
         'Health' { $data=Get-SuiteHealth; $message='Hardware and Windows service status read.' }
         'History' { $data=@(Get-SuiteHistory); $message="$($data.Count) saved operations found." }

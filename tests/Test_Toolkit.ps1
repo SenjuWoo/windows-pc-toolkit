@@ -44,7 +44,8 @@ try {
     Check ($sfcHelp.Output.Length -gt 0 -and $sfcHelp.Output.IndexOf([char]0) -eq -1) 'Real read-only SFC help/error output decodes UTF-16LE without embedded NULs'
     $catalog=@(Get-SuiteActionCatalog)
     Check (@($catalog.Id | Select-Object -Unique).Count -eq $catalog.Count) 'Unique action identifiers'
-    Check (@($catalog | Where-Object Default).Count -eq 10) 'Recommended profile includes gaming, cleanup, registry care and AI/consumer debloat'
+    Check (@($catalog | Where-Object Default).Count -eq 11) 'Recommended profile includes the OneDrive folder lock, gaming, cleanup, registry care and AI/consumer debloat'
+    Check ($catalog[0].Id -eq 'KeepLocalFolders' -and $catalog[0].Default) 'Known-folder lock is the first recommended action'
     Check (@($catalog | Where-Object Default | ForEach-Object Targets | Where-Object { $_.Path -match 'Services|WindowsUpdate|WindowsApps|Device Parameters' }).Count -eq 0) 'Default settings preserve update/security/driver dependencies'
     Expect-Failure { Get-SuitePreview @('invented-action') } 'Unknown action rejected'
     Check (@(Get-SuitePreview @()).Count -eq 0) 'Empty preview remains empty'
@@ -282,7 +283,7 @@ try {
     $result=Get-Content -LiteralPath ($requestPath+'.result.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     Check ($result.Status -eq 'Completed' -and @($result.Data).Count -eq 1) 'Fresh install worker + argument quoting + JSON result'
     $native=Invoke-SuiteNative "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @('-NoProfile','-STA','-ExecutionPolicy','Bypass','-File',(Join-Path $fresh 'Toolkit.ps1'),'-SmokeTest')
-    Check ($native.Output -match 'Dashboard loaded: 55 controls, 19 optimization choices') 'Real WPF dashboard loads in a fresh install'
+    Check ($native.Output -match 'Dashboard loaded: 66 controls, 20 optimization choices') 'Real WPF dashboard loads in a fresh install'
     # Exercise the actual WPF button -> background job -> DispatcherTimer ->
     # rendered result path. Preview reads settings and changes none of them.
     . (Join-Path $fresh 'Toolkit.ps1') -SmokeTest | Out-Null

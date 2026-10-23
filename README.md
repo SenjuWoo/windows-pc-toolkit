@@ -6,6 +6,8 @@
 
 **[Download v3.0.2](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.2/Windows-PC-Toolkit-3.0.2.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.2)
 
+The downloadable ZIP is **3.0.2**. OneDrive folder protection described below is in source **3.1.0** and is not in that ZIP until 3.1.0 is published.
+
 **3.0.2 safety cross-audit.** A second whole-project review fixes malformed recovery records, linked cache/state paths and repair backup/restore-point false success. See the [latest audit](docs/AUDIT_2026-10-11.md), [previous audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md). This update repairs existing features before further expansion.
 
 ![Toolkit dashboard](docs/images/dashboard.png)
@@ -18,8 +20,9 @@ Download the **[complete v3.0.2 ZIP](https://github.com/SenjuWoo/windows-pc-tool
 
 For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
-**Optimize now** applies ten recommended actions together:
+**Optimize now** applies eleven recommended actions together:
 
+- Keep Desktop, Documents and Pictures on this PC. This writes `KFMBlockOptIn` only when those folders are already local. It does not move or delete files, and it does not uninstall OneDrive.
 - Enable Windows Game Mode.
 - Disable promotional suggestions and silent suggested-app installs.
 - Disable advertising personalization and tailored experiences.
@@ -37,11 +40,12 @@ Preview includes reviewed startup/app selections. Reviewed selections also work 
 
 The one-click profile names installed apps in its removal confirmation; package backups are verified before each uninstall. To keep consumer apps, untick **Remove Copilot and optional consumer apps**. For individual app removals and startup control, select rows on their pages and tick **Also apply my selected startup entries and app removals**. These changes share one recovery journal.
 
-## Six organized pages
+## Seven organized pages
 
 | Page | Features |
 | --- | --- |
 | Optimize | Recommended/custom choices, read-only preview, progress and results. |
+| OneDrive folders | Shows whether Desktop, Documents, Pictures, Music and Videos are on this PC. Sign in and choose Only on my PC before uninstalling OneDrive. The lock and the Apps shortcut stay unavailable while a folder still points at OneDrive. |
 | Startup & tasks | Registry startup entries and third-party boot/logon tasks; reviewed disable and original-state undo. Microsoft tasks are excluded. |
 | App debloat | Consumer-app removal for your account after verified package copies. Store, Xbox, Gaming Services, WebView, frameworks and essential packages are excluded. |
 | Encrypted DNS | Physical-adapter selection, coherent Quad9/AdGuard profiles, verification, previous-state restore and automatic DNS. |
@@ -96,7 +100,7 @@ Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `Ga
 
 | Component | Version | Documentation |
 | --- | ---: | --- |
-| Dashboard / core | 3.0.2 | This page |
+| Dashboard / core | 3.1.0 | This page |
 | Gaming Optimizer | 5.0.2 | [Gaming](pc-gaming-optimizer/README.md) |
 | PC Cleaner | 1.1.2 | [Cleanup/registry](pc-cleaner/README.md) |
 | Corruption Fixer | 7.2.2 | [Repair](pc-corruption-fixer/README.md) |

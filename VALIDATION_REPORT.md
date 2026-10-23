@@ -1,5 +1,7 @@
 # Validation report
 
+Windows PC Toolkit 3.1.0 adds the OneDrive folder gate on October 23, 2026. Local Windows PowerShell 5.1 STA passed 614 assertions: OneDrive gate 30, base 117, Suite 48, Cleaner 57, DNS/privacy 99, repair/gaming 49, launchers 125, final gaming 24 and final Fixer 65. `Validate_All.ps1` parsed 46 PowerShell files. The new gate is `tests/Test_OneDrive.ps1`: fixture registry only, no live uninstall, no live shell-folder write, and no file deletion. A fresh dashboard load reports 66 controls and 20 optimization choices. The dashboard screenshot was rendered at 1200 by 860 and inspected. The checks below remain the 3.0.2 audit.
+
 Windows PC Toolkit 3.0.2, local Windows 11 audit validation on October 11, 2026. [Final whole-project safety findings](docs/AUDIT_2026-10-11.md), following the [3.0.1 audit](docs/AUDIT_2026-10-10.md).
 
 ## Observed results

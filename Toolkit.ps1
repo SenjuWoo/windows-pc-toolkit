@@ -41,11 +41,13 @@ $script:job=$null
 $script:requestPath=$null
 $script:operation=$null
 $script:progressStamp=''
-$script:pages=@('OptimizePage','StartupPage','AppsPage','DnsPage','RecoveryPage','ToolsPage')
-$script:navNames=@('NavOptimize','NavStartup','NavApps','NavDns','NavRecovery','NavTools')
-$script:operationButtons=@('OptimizeButton','PreviewButton','RefreshStartup','DisableStartup','RefreshApps','RemoveApps','ApplyDns','VerifyDns','RestoreDns','DhcpDns','RefreshDns','RefreshHistory','UndoButton','RepairButton','RestorePointButton','HealthButton','OpenFixer','OpenCleaner','OpenPrivacy','OpenGaming','OpenDns')
+$script:pages=@('OptimizePage','OneDrivePage','StartupPage','AppsPage','DnsPage','RecoveryPage','ToolsPage')
+$script:navNames=@('NavOptimize','NavOneDrive','NavStartup','NavApps','NavDns','NavRecovery','NavTools')
+$script:oneDriveReport=$null
+$script:operationButtons=@('OptimizeButton','PreviewButton','RefreshOneDrive','LockFolders','UninstallOneDrive','RestoreOneDriveFolders','RefreshStartup','DisableStartup','RefreshApps','RemoveApps','ApplyDns','VerifyDns','RestoreDns','DhcpDns','RefreshDns','RefreshHistory','UndoButton','RepairButton','RestorePointButton','HealthButton','OpenFixer','OpenCleaner','OpenPrivacy','OpenGaming','OpenDns')
 
-foreach ($choice in ($script:catalog | Sort-Object @{Expression='Default';Descending=$true},Category)) {
+# OneDrive stays first among the recommended actions so the folder lock is visible without scrolling.
+foreach ($choice in ($script:catalog | Sort-Object @{Expression='Default';Descending=$true}, @{Expression={ if ($_.Category -eq 'OneDrive') { '0' } else { $_.Category } }})) {
     $row=New-Object Windows.Controls.StackPanel
     $row.Margin=New-Object Windows.Thickness(0,0,12,14)
     $check=New-Object Windows.Controls.CheckBox
@@ -63,6 +65,14 @@ $script:controls.ProviderCombo.ItemsSource=@(
     [pscustomobject]@{Key='AdGuard';Name='AdGuard DNS - ads and trackers'})
 $script:controls.ProviderCombo.SelectedIndex=0
 
+function Update-OneDriveActions {
+    $idle=(-not $script:job)
+    $script:controls.LockFolders.IsEnabled=$idle
+    $script:controls.RefreshOneDrive.IsEnabled=$idle
+    $report=$script:oneDriveReport
+    $script:controls.UninstallOneDrive.IsEnabled=$idle -and $report -and [bool]$report.UninstallAllowed
+    $script:controls.RestoreOneDriveFolders.IsEnabled=$idle -and $report -and [bool]$report.RestoreAllowed
+}
 function Set-ToolkitBusy {
     param([bool]$Busy)
     foreach ($name in $script:operationButtons) { $script:controls[$name].IsEnabled=(-not $Busy) }
@@ -70,6 +80,7 @@ function Set-ToolkitBusy {
     $script:controls.IncludeReviewed.IsEnabled=(-not $Busy)
     foreach ($check in $script:optionChecks.Values) { $check.IsEnabled=(-not $Busy) }
     $script:controls.BusyBar.Visibility=if ($Busy) { 'Visible' } else { 'Collapsed' }
+    Update-OneDriveActions
 }
 function Show-ToolkitPage {
     param([int]$Index)
@@ -79,10 +90,11 @@ function Show-ToolkitPage {
     }
     if (-not $script:job) {
         switch ($Index) {
-            1 { Start-ToolkitOperation 'Startup' }
-            2 { Start-ToolkitOperation 'Apps' }
-            3 { Start-ToolkitOperation 'DnsInfo' }
-            4 { Start-ToolkitOperation 'History' }
+            1 { Start-ToolkitOperation 'OneDrive' }
+            2 { Start-ToolkitOperation 'Startup' }
+            3 { Start-ToolkitOperation 'Apps' }
+            4 { Start-ToolkitOperation 'DnsInfo' }
+            5 { Start-ToolkitOperation 'History' }
         }
     }
 }
@@ -133,6 +145,34 @@ function Invoke-ToolkitButton {
             }
             'PreviewButton' { Start-ToolkitOperation 'Preview' @($script:catalog | Where-Object { $script:optionChecks[$_.Id].IsChecked } | ForEach-Object Id) }
             'RecommendedButton' { foreach ($choice in $script:catalog) { $script:optionChecks[$choice.Id].IsChecked=$choice.Default } }
+            'RefreshOneDrive' { Start-ToolkitOperation 'OneDrive' }
+            'OpenWindowsBackup' { Start-Process 'ms-settings:backup' }
+            'OpenOneDriveApp' {
+                $oneDrive=Get-SuiteOneDriveExecutable
+                if ($oneDrive) { Start-Process -FilePath $oneDrive }
+                else { $script:controls.StatusText.Text='OneDrive is not installed. Sign-in is required only while the app is still there. If folders still point at OneDrive, use Restore local locations.' }
+            }
+            'LockFolders' {
+                $gate=Get-SuiteOneDriveReport
+                $script:oneDriveReport=$gate
+                $script:controls.OneDriveBanner.Text=$gate.Summary
+                Update-OneDriveActions
+                if (-not $gate.PolicyAllowed) { $script:controls.StatusText.Text=$gate.PolicyBlock; return }
+                $answer=[Windows.MessageBox]::Show('Lock Desktop, Documents and Pictures so OneDrive cannot take them over? Files are not moved or deleted. Do this only after every folder says it is on this PC.','Keep folders on this PC','YesNo','Question','No')
+                if ($answer -eq 'Yes') { Start-ToolkitOperation 'Optimize' @('KeepLocalFolders') }
+            }
+            'UninstallOneDrive' {
+                $gate=if ($script:oneDriveReport) { $script:oneDriveReport } else { Get-SuiteOneDriveReport }
+                if (-not $gate.UninstallAllowed) { $script:controls.StatusText.Text=$gate.UninstallBlock; return }
+                $answer=[Windows.MessageBox]::Show("Folders are on this PC. Open Installed apps and uninstall Microsoft OneDrive there.`n`nThe toolkit does not delete your files and does not run the uninstaller itself.",'Uninstall OneDrive','YesNo','Question','No')
+                if ($answer -eq 'Yes') { Start-Process 'ms-settings:appsfeatures' }
+            }
+            'RestoreOneDriveFolders' {
+                $gate=Get-SuiteOneDriveReport
+                if (-not $gate.RestoreAllowed) { $script:controls.StatusText.Text=$gate.RestoreBlock; return }
+                $answer=[Windows.MessageBox]::Show("OneDrive is already gone and at least one folder still points at it. Point those folders back at this PC?`n`nFiles stay where they are. Nothing is deleted. Sign out afterwards, then move leftover files out of the old OneDrive folder yourself.",'Restore local folder locations','YesNo','Question','No')
+                if ($answer -eq 'Yes') { Start-ToolkitOperation 'RestoreOneDriveFolders' }
+            }
             'RefreshStartup' { Start-ToolkitOperation 'Startup' }
             'DisableStartup' { Start-ToolkitOperation 'DisableStartup' @($script:controls.StartupGrid.SelectedItems | ForEach-Object Id) }
             'RefreshApps' { Start-ToolkitOperation 'Apps' }
@@ -199,8 +239,14 @@ $script:timer.Add_Tick({
         $script:controls.StatusText.Text=$result.Message
         if ($result.Report) {
             $script:controls.ResultText.Text=(@($result.Report.Steps | ForEach-Object { "[$($_.Status)] $($_.Action): $($_.Message)" }) -join "`r`n")+"`r`nReport: "+$result.Report.Path
-        } elseif ($result.Status -eq 'Completed' -and $script:operation -in @('Startup','Apps','History','DnsInfo')) {
+        } elseif ($result.Status -eq 'Completed' -and $script:operation -in @('Startup','Apps','History','DnsInfo','OneDrive')) {
             switch ($script:operation) {
+                'OneDrive' {
+                    $script:oneDriveReport=$result.Data
+                    $script:controls.OneDriveGrid.ItemsSource=@($result.Data.Folders)
+                    $script:controls.OneDriveSummary.Text=[string]$result.Data.Summary
+                    $script:controls.OneDriveBanner.Text=[string]$result.Data.Summary
+                }
                 'Startup' { $script:controls.StartupGrid.ItemsSource=@($result.Data) }
                 'Apps' { $script:controls.AppsGrid.ItemsSource=@($result.Data) }
                 'History' { $script:controls.HistoryGrid.ItemsSource=@($result.Data) }
@@ -230,6 +276,7 @@ $script:window.Add_Closing({param($sender,$eventArgs)
 })
 
 if ($RenderPreview) {
+    $script:controls.OneDriveBanner.Text='Check Desktop, Documents, Pictures, Music and Videos before uninstalling OneDrive.'
     $script:window.Width=1200; $script:window.Height=860
     $content=$script:window.Content
     $content.Measure((New-Object Windows.Size(1200,860)))
@@ -242,6 +289,15 @@ if ($RenderPreview) {
     $stream=[IO.File]::Create([IO.Path]::GetFullPath($RenderPreview))
     try { $encoder.Save($stream) } finally { $stream.Dispose() }
     Write-Output "Rendered dashboard: $RenderPreview"
+}
+if (-not $RenderPreview) {
+    try {
+        $script:oneDriveReport=Get-SuiteOneDriveReport
+        $script:controls.OneDriveBanner.Text=$script:oneDriveReport.Summary
+        Update-OneDriveActions
+    } catch {
+        $script:controls.OneDriveBanner.Text='OneDrive folder check failed: '+$_.Exception.Message
+    }
 }
 if ($SmokeTest -or $RenderPreview) { Write-Output "Dashboard loaded: $($script:controls.Count) controls, $($script:optionChecks.Count) optimization choices."; return }
 $script:window.Add_Loaded({$script:timer.Start(); Start-ToolkitOperation 'Health'})

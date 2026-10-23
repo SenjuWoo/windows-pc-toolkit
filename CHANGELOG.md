@@ -1,5 +1,14 @@
 # Changelog
 
+## Toolkit 3.1.0 (2026-10-23)
+
+- Add an OneDrive folders page. It reads Desktop, Documents, Pictures, Music and Videos and says whether each one is on this PC.
+- Refuse the known-folder lock, and do not offer uninstall, while any of those folders still point at OneDrive. The user has to sign in and choose Only on my PC first. Uninstalling first leaves the old paths behind.
+- Lock folders with the documented `KFMBlockOptIn` policy value 1 only after they are already local. This does not move or delete files. `KFMBlockOptOut`, `KFMSilentOptIn` and `KFMOptInWithWizard` block the lock.
+- If OneDrive is already gone and a folder still points at it, restore only those locations to the local profile and leave the files where they are. That report is not undone.
+- The toolkit does not run an OneDrive uninstaller. When the folders are local and the app is installed, it opens Installed apps.
+- The OneDrive page wraps the warning, keeps folder paths readable, and leaves uninstall and restore disabled until the check allows them.
+
 ## Toolkit 3.0.2 (2026-10-11)
 
 - Cross-audit the whole kit again; validate complete recovery records before writes and reject unsupported targets, malformed values, duplicate records and unavailable original adapters.
