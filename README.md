@@ -4,11 +4,9 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-**[Download v3.0.2](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.2/Windows-PC-Toolkit-3.0.2.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.0.2)
+**[Download v3.1.0](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.0/Windows-PC-Toolkit-3.1.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.1.0)
 
-The downloadable ZIP is **3.0.2**. OneDrive folder protection described below is in source **3.1.0** and is not in that ZIP until 3.1.0 is published.
-
-**3.0.2 safety cross-audit.** A second whole-project review fixes malformed recovery records, linked cache/state paths and repair backup/restore-point false success. See the [latest audit](docs/AUDIT_2026-10-11.md), [previous audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md). This update repairs existing features before further expansion.
+**3.1.0 OneDrive folders.** On a new Windows install, sign in and choose Only on my PC for Desktop, Documents, Pictures, Music and Videos before you uninstall OneDrive. The toolkit refuses the lock and the Installed-apps shortcut while any of those folders still point at OneDrive. It does not run an uninstaller and it does not delete files. The [3.0.2 safety audit](docs/AUDIT_2026-10-11.md), [previous audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md) still bound what the kit will change.
 
 ![Toolkit dashboard](docs/images/dashboard.png)
 
@@ -16,7 +14,7 @@ Rendered from the actual WPF dashboard with initial selections. Hardware and res
 
 ## Start here
 
-Download the **[complete v3.0.2 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.0.2/Windows-PC-Toolkit-3.0.2.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
+Download the **[complete v3.1.0 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.0/Windows-PC-Toolkit-3.1.0.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
 
 For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
