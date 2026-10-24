@@ -44,7 +44,7 @@ $script:progressStamp=''
 $script:pages=@('OptimizePage','OneDrivePage','StartupPage','AppsPage','DnsPage','RecoveryPage','ToolsPage')
 $script:navNames=@('NavOptimize','NavOneDrive','NavStartup','NavApps','NavDns','NavRecovery','NavTools')
 $script:oneDriveReport=$null
-$script:operationButtons=@('OptimizeButton','PreviewButton','RefreshOneDrive','LockFolders','UninstallOneDrive','RestoreOneDriveFolders','RefreshStartup','DisableStartup','RefreshApps','RemoveApps','ApplyDns','VerifyDns','RestoreDns','DhcpDns','RefreshDns','RefreshHistory','UndoButton','RepairButton','RestorePointButton','HealthButton','OpenFixer','OpenCleaner','OpenPrivacy','OpenGaming','OpenDns')
+$script:operationButtons=@('OptimizeButton','PreviewButton','RefreshOneDrive','LockFolders','UninstallOneDrive','OpenOneDriveRecovery','RefreshStartup','DisableStartup','RefreshApps','RemoveApps','ApplyDns','VerifyDns','RestoreDns','DhcpDns','RefreshDns','RefreshHistory','UndoButton','RepairButton','RestorePointButton','HealthButton','OpenFixer','OpenCleaner','OpenPrivacy','OpenGaming','OpenDns')
 
 # OneDrive stays first among the recommended actions so the folder lock is visible without scrolling.
 foreach ($choice in ($script:catalog | Sort-Object @{Expression='Default';Descending=$true}, @{Expression={ if ($_.Category -eq 'OneDrive') { '0' } else { $_.Category } }})) {
@@ -71,7 +71,7 @@ function Update-OneDriveActions {
     $script:controls.RefreshOneDrive.IsEnabled=$idle
     $report=$script:oneDriveReport
     $script:controls.UninstallOneDrive.IsEnabled=$idle -and $report -and [bool]$report.UninstallAllowed
-    $script:controls.RestoreOneDriveFolders.IsEnabled=$idle -and $report -and [bool]$report.RestoreAllowed
+    $script:controls.OpenOneDriveRecovery.IsEnabled=$idle
 }
 function Set-ToolkitBusy {
     param([bool]$Busy)
@@ -150,7 +150,7 @@ function Invoke-ToolkitButton {
             'OpenOneDriveApp' {
                 $oneDrive=Get-SuiteOneDriveExecutable
                 if ($oneDrive) { Start-Process -FilePath $oneDrive }
-                else { $script:controls.StatusText.Text='OneDrive is not installed. Sign-in is required only while the app is still there. If folders still point at OneDrive, use Restore local locations.' }
+                else { $script:controls.StatusText.Text='OneDrive is not installed. Local folders need no sign-in. If folders still point at OneDrive, open Recovery instructions.' }
             }
             'LockFolders' {
                 $gate=Get-SuiteOneDriveReport
@@ -162,17 +162,14 @@ function Invoke-ToolkitButton {
                 if ($answer -eq 'Yes') { Start-ToolkitOperation 'Optimize' @('KeepLocalFolders') }
             }
             'UninstallOneDrive' {
-                $gate=if ($script:oneDriveReport) { $script:oneDriveReport } else { Get-SuiteOneDriveReport }
+                $gate=Get-SuiteOneDriveReport
+                $script:oneDriveReport=$gate
+                Update-OneDriveActions
                 if (-not $gate.UninstallAllowed) { $script:controls.StatusText.Text=$gate.UninstallBlock; return }
                 $answer=[Windows.MessageBox]::Show("Folders are on this PC. Open Installed apps and uninstall Microsoft OneDrive there.`n`nThe toolkit does not delete your files and does not run the uninstaller itself.",'Uninstall OneDrive','YesNo','Question','No')
                 if ($answer -eq 'Yes') { Start-Process 'ms-settings:appsfeatures' }
             }
-            'RestoreOneDriveFolders' {
-                $gate=Get-SuiteOneDriveReport
-                if (-not $gate.RestoreAllowed) { $script:controls.StatusText.Text=$gate.RestoreBlock; return }
-                $answer=[Windows.MessageBox]::Show("OneDrive is already gone and at least one folder still points at it. Point those folders back at this PC?`n`nFiles stay where they are. Nothing is deleted. Sign out afterwards, then move leftover files out of the old OneDrive folder yourself.",'Restore local folder locations','YesNo','Question','No')
-                if ($answer -eq 'Yes') { Start-ToolkitOperation 'RestoreOneDriveFolders' }
-            }
+            'OpenOneDriveRecovery' { Start-Process 'https://support.microsoft.com/en-us/onedrive/back-up-your-folders-with-onedrive' }
             'RefreshStartup' { Start-ToolkitOperation 'Startup' }
             'DisableStartup' { Start-ToolkitOperation 'DisableStartup' @($script:controls.StartupGrid.SelectedItems | ForEach-Object Id) }
             'RefreshApps' { Start-ToolkitOperation 'Apps' }

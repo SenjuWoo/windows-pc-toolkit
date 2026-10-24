@@ -245,6 +245,18 @@ try {
     Check ($script:captured -eq 'Optimize') 'Actual Optimize handler accepts reviewed-only startup selections'
     Set-ToolkitBusy $true
     Check (-not $script:controls.IncludeReviewed.IsEnabled -and -not $script:controls.RecommendedButton.IsEnabled -and -not $script:optionChecks.GameMode.IsEnabled) 'Running operation freezes profile/review controls'
+    Set-ToolkitBusy $false
+    # Changed external OneDrive state must win over a cached report at click time.
+    function Get-SuiteOneDriveReport { [pscustomobject]@{UninstallAllowed=$false;UninstallBlock='Fresh redirected folder status'} }
+    $script:oneDriveReport=[pscustomobject]@{UninstallAllowed=$false;UninstallBlock='Stale status'}
+    Invoke-ToolkitButton $script:controls.UninstallOneDrive $null
+    Check ($script:controls.StatusText.Text -eq 'Fresh redirected folder status') 'Uninstall handler refreshes even when a cached report exists'
+    $script:oneDriveReport=[pscustomobject]@{UninstallAllowed=$true}
+    Invoke-ToolkitButton $script:controls.UninstallOneDrive $null
+    Check ($script:controls.StatusText.Text -eq 'Fresh redirected folder status') 'Uninstall handler refuses after local folders become redirected'
+    function Start-Process { param($FilePath) $script:openedGuide=$FilePath }
+    Invoke-ToolkitButton $script:controls.OpenOneDriveRecovery $null
+    Check ($script:openedGuide -eq 'https://support.microsoft.com/en-us/onedrive/back-up-your-folders-with-onedrive') 'Recovery opens supported instructions instead of a registry migration'
     $script:window.Close()
     Write-Host "PASS: $checks Suite audit checks."
 } finally {

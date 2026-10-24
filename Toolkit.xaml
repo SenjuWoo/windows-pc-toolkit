@@ -40,7 +40,7 @@
       <DockPanel LastChildFill="True">
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,30">
           <TextBlock Text="PC TOOLKIT" FontWeight="Bold" FontSize="21"/>
-          <TextBlock Text="Windows · v3.1.0" Foreground="#7E94B2" Margin="0,8,0,0"/>
+          <TextBlock Text="Windows · v3.1.1" Foreground="#7E94B2" Margin="0,8,0,0"/>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom">
           <TextBlock Text="Portable. Local. No account." Foreground="#7E94B2" FontSize="12" Margin="0,0,0,12"/>
@@ -89,7 +89,7 @@
         <Grid>
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <TextBlock Text="Keep folders on this PC" Style="{StaticResource Heading}"/>
-          <TextBlock Grid.Row="1" Text="Sign in to OneDrive and choose Only on my PC for Desktop, Documents, Pictures, Music and Videos before you uninstall it. Uninstalling first leaves those paths pointing at OneDrive. This page does not delete files." Style="{StaticResource Description}"/>
+          <TextBlock Grid.Row="1" Text="If folders already say On this PC, no OneDrive sign-in is needed. Otherwise stop their backup in OneDrive Settings > Sync and backup > Manage backup and choose Only on my PC before uninstalling. Download online-only files first if prompted. Keep an independent backup if you need both local and cloud copies." Style="{StaticResource Description}"/>
           <TextBlock Grid.Row="2" Name="OneDriveSummary" Text="Open this page to read the current folder locations." Foreground="#D7E4F7" Margin="0,0,0,12"/>
         </Grid>
         <StackPanel Grid.Row="1" Margin="0,0,0,18">
@@ -101,15 +101,19 @@
           </StackPanel>
           <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
             <Button Name="UninstallOneDrive" Content="Uninstall in Installed apps" IsEnabled="False"/>
-            <Button Name="RestoreOneDriveFolders" Content="Restore local locations" IsEnabled="False"/>
+            <Button Name="OpenOneDriveRecovery" Content="Recovery instructions"/>
           </StackPanel>
         </StackPanel>
-        <DataGrid Grid.Row="2" Name="OneDriveGrid" SelectionMode="Single">
+        <DataGrid Grid.Row="2" Name="OneDriveGrid" SelectionMode="Single" RowHeight="NaN" MinRowHeight="34">
           <DataGrid.Columns>
             <DataGridTextColumn Header="Folder" Binding="{Binding Folder}" Width="110"/>
-            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="200"/>
+            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="200">
+              <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style></DataGridTextColumn.ElementStyle>
+            </DataGridTextColumn>
             <DataGridTextColumn Header="Location" Binding="{Binding Location}" Width="*" MinWidth="280"/>
-            <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="160"/>
+            <DataGridTextColumn Header="Note" Binding="{Binding Note}" Width="220">
+              <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style></DataGridTextColumn.ElementStyle>
+            </DataGridTextColumn>
           </DataGrid.Columns>
         </DataGrid>
       </Grid>

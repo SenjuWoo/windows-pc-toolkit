@@ -9,7 +9,7 @@
 | GPU | Driver/MSI/display audits and manual HAGS; no automatic vendor power-state or undocumented GPU writes. |
 | Power | Native settings, plan audit and temporary stay-awake; permanent plans, hibernation and USB policies preserved by default. |
 | Bloatware/services | Default allowlisted consumer-AppX removal with a named confirmation and verified copies, startup/task disable and service health; no blanket service-disable profile. |
-| OneDrive folders | Read-only location check for Desktop, Documents, Pictures, Music and Videos. `KFMBlockOptIn=1` only after they are local. No uninstaller, no file delete, no path rewrite while OneDrive is installed. |
+| OneDrive folders | Checks five folder locations and modern local aliases; uncertain, linked and redirected locations block `KFMBlockOptIn=1` and the uninstall shortcut. Incomplete cloud scans are explicit. No uninstaller, file deletion or folder-path rewrite; guided recovery only. |
 | Appearance | Animations, themes, extensions, taskbar alignment and Widgets button; a subset of Duck's catalogue. |
 | AI | Modern Copilot removal, build-gated Recall feature disable/undo, Edge built-in model/API policies and advanced Windows/browser policies. Separate local AI stores preserved; deleted snapshots/browser models not restored. |
 | Hardware | OS/build, CPU, RAM and services in WPF; GPU/storage/display details in console audits. |

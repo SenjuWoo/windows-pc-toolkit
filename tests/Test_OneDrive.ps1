@@ -1,5 +1,5 @@
 # OneDrive folder gate. Proves the toolkit refuses the lock and the location
-# restore while backup is still on, and that a restore does not delete files.
+# restore, preserves existing files, and refuses uncertain folder locations.
 #requires -version 5.1
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
@@ -66,18 +66,14 @@ try {
     Check ((Get-RegValue $userKey 'Personal').Value -eq $documents) 'Refused restore leaves the OneDrive path in place'
 
     $personal=Get-FixtureReport ''
-    Check ($personal.RestoreAllowed -and -not $personal.UninstallAllowed) 'Gone app plus an OneDrive path is the restore case, not the uninstall case'
-    $restored=Invoke-SuiteOneDriveFolderRestore -UserShellKey $userKey -ShellKey $shellKey -PolicyKey $policyKey -ProfilePath $profile -OneDriveRoots @() -OneDriveExecutable ''
-    Check ($restored.Mode -eq 'OneDriveFolders' -and $restored.Status -eq 'Completed') 'Restore records a completed OneDriveFolders report'
-    $afterUser=Get-RegValue $userKey 'Personal'
-    Check ($afterUser.Kind -eq 'ExpandString' -and $afterUser.Value -eq (Join-Path $profile 'Documents')) 'Documents user location is the local profile path'
-    Check ((Get-RegValue $shellKey 'Personal').Value -eq (Join-Path $profile 'Documents')) 'Documents Explorer cache matches the local path'
-    Check ((Get-RegValue $userKey 'Desktop').Value -eq (Join-Path $profile 'Desktop')) 'A folder that was already local is not rewritten'
-    Check ((Get-Content -LiteralPath $kept -Raw) -eq 'still here') 'Restore does not delete the file that was left in OneDrive'
-    $undoFailed=$false
-    try { Invoke-SuiteUndo -Path $restored.Path } catch { $undoFailed=$true; Check ($_.Exception.Message -match 'not put back') 'Undo explains that the OneDrive path is not restored' }
-    Check $undoFailed 'Folder restore is not undone back onto the OneDrive path'
-    Check ((Get-RegValue $userKey 'Personal').Value -eq (Join-Path $profile 'Documents')) 'Refused undo keeps the local Documents path'
+    # A missing destination used to be silently written and reported as a successful restore.
+    [IO.Directory]::Delete((Join-Path $profile 'Documents'))
+    Expect-Failure { Invoke-SuiteOneDriveFolderRestore -UserShellKey $userKey -ShellKey $shellKey -PolicyKey $policyKey -ProfilePath $profile -OneDriveRoots @() -OneDriveExecutable '' } 'Automatic registry restore is retired even when OneDrive is absent'
+    Check (-not $personal.RestoreAllowed -and -not $personal.UninstallAllowed) 'A stranded folder requires guided recovery, not an automated rewrite'
+    Check ((Get-RegValue $userKey 'Personal').Value -eq $documents -and (Get-RegValue $shellKey 'Personal').Value -eq $documents) 'Refused restore leaves both original locations intact'
+    Check ((Get-Content -LiteralPath $kept -Raw) -eq 'still here') 'Refused restore preserves the file left in OneDrive'
+    $legacy=New-SuiteRun 'OneDriveFolders'
+    Expect-Failure { Invoke-SuiteUndo -Path $legacy.Path } 'Old folder reports remain guarded against an automatic redirection undo'
 
     Set-AllLocal
     Set-RegValue $policyKey 'KFMBlockOptOut' '1' 'DWord'
@@ -94,6 +90,7 @@ try {
     Set-RegValue $userKey 'Personal' (Join-Path $profile 'OneDrive - Personal\Documents') 'String'
     Check (((Get-FixtureReport '').Folders | Where-Object Folder -eq 'Documents').UserClass -eq 'OneDrive') 'OneDrive - Personal is treated as OneDrive'
     Set-RegValue $userKey 'Personal' (Join-Path $profile 'OneDriveNotes') 'String'
+    [void][IO.Directory]::CreateDirectory((Join-Path $profile 'OneDriveNotes'))
     Check (((Get-FixtureReport '').Folders | Where-Object Folder -eq 'Documents').UserClass -eq 'Custom') 'A folder named OneDriveNotes is not treated as OneDrive backup'
     Set-RegValue $userKey 'Desktop' '%USERPROFILE%\Desktop' 'ExpandString'
     $expanded=Get-SuiteOneDriveReport -UserShellKey $userKey -ShellKey $shellKey -PolicyKey $policyKey -ProfilePath $env:USERPROFILE -OneDriveRoots @() -OneDriveExecutable ''
@@ -115,6 +112,58 @@ try {
     Check (-not (Test-SuiteCloudOnlyAttribute 0x1000)) 'The offline attribute alone is not enough'
     Check (-not (Test-SuiteOneDrivePath 'D:\Docs' @())) 'A custom drive path is not an OneDrive root'
     Check (Test-SuiteOneDrivePath 'D:\Cloud\Docs' @('D:\Cloud')) 'An account folder root counts even without the OneDrive name'
+
+    # Invalid paths and optional modern aliases cannot bypass the local-folder gate.
+    Set-AllLocal
+    foreach ($bad in @('Documents','%TOOLKIT_UNDEFINED_ROOT%\Documents',(Join-Path $profile 'missing'), 'C:\broken|path', '\\server\share\Documents')) {
+        Set-RegValue $userKey 'Personal' $bad 'String'
+        $uncertain=Get-FixtureReport (Join-Path $fixture 'OneDrive.exe')
+        Check (-not $uncertain.PolicyAllowed -and -not $uncertain.UninstallAllowed) "Unverified location blocks lock and uninstall: $bad"
+    }
+    Set-AllLocal
+    Set-RegValue $userKey 'Personal' '123' 'DWord'
+    Check (-not (Get-FixtureReport '').PolicyAllowed) 'A non-string known-folder registry value is unknown'
+    Set-AllLocal
+    Set-RegValue $shellKey 'Personal' 'Documents' 'String'
+    $badCache=Get-FixtureReport ''
+    Check (-not $badCache.PolicyAllowed -and ($badCache.Folders | Where-Object Folder -eq 'Documents').Status -eq 'Explorer cache location not verified') 'An invalid Explorer cache cannot display a safe local status'
+    Set-AllLocal
+    foreach ($alias in @('{F42EE2D3-909F-4907-8871-4C22FC0BF756}','{0DDD015D-B06C-45D5-8C4C-F59713854639}','{A0C69A99-21C8-4671-8703-7934162FCF1D}','{35286A68-3C57-41A1-BBB1-0EAE73D76C95}')) {
+        Set-RegValue $userKey $alias $documents 'String'
+        Check (-not (Get-FixtureReport '').PolicyAllowed) 'A modern local-folder alias still in OneDrive blocks the gate'
+        Remove-ItemProperty -LiteralPath $userKey -Name $alias
+    }
+    Set-RegValue $shellKey '{F42EE2D3-909F-4907-8871-4C22FC0BF756}' $documents 'String'
+    Check (-not (Get-FixtureReport '').PolicyAllowed) 'Modern shell-cache aliases are also checked before calling folders local'
+    Remove-ItemProperty -LiteralPath $shellKey -Name '{F42EE2D3-909F-4907-8871-4C22FC0BF756}'
+
+    # User-mode cannot set kernel recall flags. Feed metadata at the filesystem boundary,
+    # and assert enumeration never follows virtual/linked directories or reads file data.
+    $metadata=& (Get-Module Toolkit.Core) {
+        try {
+            $script:ScanRootAttributes=16
+            $script:ScanEntries=@(
+                [pscustomobject]@{FullName='X:\scan\cloud.txt';PSIsContainer=$false;Attributes=(0x400000 -bor 0x400)},
+                [pscustomobject]@{FullName='X:\scan\virtual';PSIsContainer=$true;Attributes=(0x400000 -bor 0x400 -bor 16)},
+                [pscustomobject]@{FullName='X:\scan\link';PSIsContainer=$true;Attributes=(0x400 -bor 16)})
+            function Test-Path { $true }
+            function Get-Item { [pscustomobject]@{Attributes=$script:ScanRootAttributes;PSIsContainer=$true} }
+            function Get-ChildItem { param($LiteralPath) if ($LiteralPath -ne 'X:\scan') { throw 'Followed a virtual directory' }; $script:ScanEntries }
+            $files=Get-SuiteCloudOnlyCount 'X:\scan'
+            $script:ScanRootAttributes=0x400 -bor 16
+            $linkedRoot=Get-SuiteCloudOnlyCount 'X:\scan'
+            $script:ScanRootAttributes=16
+            $script:ScanEntries=@(1..4 | ForEach-Object { [pscustomobject]@{FullName="X:\scan\dir$_";PSIsContainer=$true;Attributes=16} })
+            $bounded=Get-SuiteCloudOnlyCount 'X:\scan' -Limit 2
+            function Get-ChildItem { throw 'Injected enumeration denied' }
+            $denied=Get-SuiteCloudOnlyCount 'X:\scan'
+            [pscustomobject]@{Files=$files;LinkedRoot=$linkedRoot;Bounded=$bounded;Denied=$denied}
+        } finally { Remove-Item Function:Test-Path,Function:Get-Item,Function:Get-ChildItem }
+    }
+    Check ($metadata.Files.Count -eq 1 -and $metadata.Files.Incomplete) 'Recall files are counted before reparse filtering; skipped directories make the count incomplete'
+    Check ($metadata.LinkedRoot.Incomplete) 'A skipped linked or cloud root cannot report a complete zero'
+    Check ($metadata.Bounded.Capped) 'Directory entries count toward the scan limit'
+    Check ($metadata.Denied.Incomplete) 'Enumeration failure cannot report a complete zero'
 
     $live=Get-SuiteOneDriveReport
     Check ($live.Summary -is [string] -and $live.Folders.Count -eq 5) 'Live read-only report returns five folders and does not require a write'

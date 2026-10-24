@@ -4,17 +4,21 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-**[Download v3.1.0](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.0/Windows-PC-Toolkit-3.1.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.1.0)
+**[Download v3.1.1](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.1/Windows-PC-Toolkit-3.1.1.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.1.1)
 
-**3.1.0 OneDrive folders.** On a new Windows install, sign in and choose Only on my PC for Desktop, Documents, Pictures, Music and Videos before you uninstall OneDrive. The toolkit refuses the lock and the Installed-apps shortcut while any of those folders still point at OneDrive. It does not run an uninstaller and it does not delete files. The [3.0.2 safety audit](docs/AUDIT_2026-10-11.md), [previous audit](docs/AUDIT_2026-10-10.md) and [validation details](VALIDATION_REPORT.md) still bound what the kit will change.
+**Check OneDrive before uninstalling it.** If your folders are already local, no OneDrive sign-in is needed. If backup is active, stop it in OneDrive's Manage backup and choose **Only on my PC**; download online-only files first if prompted. That Microsoft choice removes the cloud copy, so keep an independent backup if you need both. The toolkit checks folder locations and modern local aliases, blocks uncertain locations, and rechecks before opening Installed apps. It does not uninstall OneDrive, move files or rewrite folder locations. [Recovery instructions](docs/ONEDRIVE_RECOVERY.md) · [Safety audit](docs/AUDIT_2026-10-11.md) · [Validation and limits](VALIDATION_REPORT.md).
 
 ![Toolkit dashboard](docs/images/dashboard.png)
 
 Rendered from the actual WPF dashboard with initial selections. Hardware and results load on the target PC.
 
+![OneDrive folder preflight](docs/images/onedrive.png)
+
+The OneDrive page with read-only status from a local-folder configuration; the profile path is anonymized. It shows location checks, not proof that every cloud file was downloaded.
+
 ## Start here
 
-Download the **[complete v3.1.0 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.0/Windows-PC-Toolkit-3.1.0.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
+Download the **[complete v3.1.1 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.1/Windows-PC-Toolkit-3.1.1.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
 
 For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
@@ -43,7 +47,7 @@ The one-click profile names installed apps in its removal confirmation; package 
 | Page | Features |
 | --- | --- |
 | Optimize | Recommended/custom choices, read-only preview, progress and results. |
-| OneDrive folders | Shows whether Desktop, Documents, Pictures, Music and Videos are on this PC. Sign in and choose Only on my PC before uninstalling OneDrive. The lock and the Apps shortcut stay unavailable while a folder still points at OneDrive. |
+| OneDrive folders | Checks Desktop, Documents, Pictures, Music and Videos, including modern local aliases. Local folders need no sign-in. The lock and Apps shortcut refuse redirected or unverified locations. Recovery opens Microsoft's instructions; automatic folder migration is not offered. |
 | Startup & tasks | Registry startup entries and third-party boot/logon tasks; reviewed disable and original-state undo. Microsoft tasks are excluded. |
 | App debloat | Consumer-app removal for your account after verified package copies. Store, Xbox, Gaming Services, WebView, frameworks and essential packages are excluded. |
 | Encrypted DNS | Physical-adapter selection, coherent Quad9/AdGuard profiles, verification, previous-state restore and automatic DNS. |
@@ -98,7 +102,7 @@ Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `Ga
 
 | Component | Version | Documentation |
 | --- | ---: | --- |
-| Dashboard / core | 3.1.0 | This page |
+| Dashboard / core | 3.1.1 | This page |
 | Gaming Optimizer | 5.0.2 | [Gaming](pc-gaming-optimizer/README.md) |
 | PC Cleaner | 1.1.2 | [Cleanup/registry](pc-cleaner/README.md) |
 | Corruption Fixer | 7.2.2 | [Repair](pc-corruption-fixer/README.md) |

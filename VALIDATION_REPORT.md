@@ -1,5 +1,19 @@
 # Validation report
 
+## 3.1.1 verification — October 24, 2026
+
+Review of the 3.1.0 handoff reproduced its 614 native assertions and verified successful exact-release-SHA CI/Actions analysis, zero open alerts in the three available security categories, and the three downloaded asset hashes. Its claim of raw Git-blob equality was incorrect: 66 of 67 payload files have CRLF differences; all 67 match after newline normalization. No other payload content difference was found.
+
+The corrected source has 629 passing native fixture assertions: OneDrive 42, base 117, Suite 51, Cleaner 57, DNS/privacy 99, repair/gaming 49, launchers 125, final gaming 24 and final Fixer 65. A complete suite run passed, followed by focused reruns after the final OneDrive/Suite additions. `Validate_All.ps1` passes for 46 PowerShell files. These are Windows PowerShell 5.1 STA checks, not just a PowerShell 7 parse.
+
+New regressions first failed on the original implementation: automatic restore with a missing destination, relative paths accepted as safe, cloud placeholders skipped, cached uninstall status, and the contradictory cache-status label. They pass after the fixes. Additional cases cover unresolved/invalid/UNC/missing paths, wrong registry kind, modern local aliases in both registry locations, reparse-plus-recall metadata, virtual/link roots, directory-only bounds and denied enumeration. The actual WPF recovery handler is intercepted to verify it opens Microsoft's guide instead of migrating folders. Kernel-only recall bits are injected as metadata at the filesystem boundary; the fixture does not pretend to be a real OneDrive provider.
+
+The dashboard and OneDrive page were rendered and their pixels inspected at 1200 by 860. Folder status/notes wrap, the guide remains available, and uninstall is unavailable in the inspected configuration with OneDrive absent. The live folder check was read-only; its profile path is anonymized in the published image. Production folder paths, files, OneDrive, DNS, services and installed apps were not modified.
+
+Release CI, security queries and extracted-package/download checks are recorded by exact commit in STATE.md and the attached release-provenance.json. Actions analysis covers GitHub Actions, not the PowerShell implementation. The shared ChatGPT URL returned only a page shell through retrieval; no conversation-content verification is claimed. The user's supplied requirements and Microsoft's current folder-backup/file-attribute documentation supplied the needed behavior contracts.
+
+Remaining runtime limits: real Explorer/OneDrive migration and uninstall, interactive UAC, live Windows servicing, actual AppX/provider outcomes and FPS gains remain untested. Automatic registry-only folder restoration has been removed, not certified. A bounded metadata scan cannot establish that all cloud data has downloaded. The earlier audit below continues to apply.
+
 Windows PC Toolkit 3.1.0 adds the OneDrive folder gate on October 23, 2026. Local Windows PowerShell 5.1 STA passed 614 assertions: OneDrive gate 30, base 117, Suite 48, Cleaner 57, DNS/privacy 99, repair/gaming 49, launchers 125, final gaming 24 and final Fixer 65. `Validate_All.ps1` parsed 46 PowerShell files. The new gate is `tests/Test_OneDrive.ps1`: fixture registry only, no live uninstall, no live shell-folder write, and no file deletion. A fresh dashboard load reports 66 controls and 20 optimization choices. The dashboard screenshot was rendered at 1200 by 860 and inspected. The checks below remain the 3.0.2 audit.
 
 Windows PC Toolkit 3.0.2, local Windows 11 audit validation on October 11, 2026. [Final whole-project safety findings](docs/AUDIT_2026-10-11.md), following the [3.0.1 audit](docs/AUDIT_2026-10-10.md).

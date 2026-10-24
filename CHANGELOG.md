@@ -1,5 +1,14 @@
 # Changelog
 
+## Toolkit 3.1.1 (2026-10-24)
+
+- Fix the OneDrive preflight accepting relative, unresolved, invalid, missing or linked locations as safe custom folders. Check the modern local Documents/Pictures/Music/Videos aliases too; preserve valid custom local directories.
+- Refresh folder status when uninstall is clicked, so a previous successful check cannot authorize an uninstall shortcut after backup settings change.
+- Count cloud-file recall flags before skipping reparse points. Bound all inspected entries and explicitly report skipped, inaccessible and virtual directories as incomplete; never follow them or open file contents.
+- Withdraw the automatic registry-only folder restore introduced in 3.1.0: it could redirect apps to a nonexistent destination and did not prove complete shell migration. Old requests now refuse before writes. Recovery instructions replace that action; existing files and reports remain intact.
+- Correct fresh-install guidance: already-local folders need no OneDrive sign-in. Explain Microsoft's Only on my PC choice and the need to download online-only data first.
+- Add regression cases for these failures and persistent project instructions. Keep the previous 3.0.2 extracted release unchanged.
+
 ## Toolkit 3.1.0 (2026-10-23)
 
 - Add an OneDrive folders page. It reads Desktop, Documents, Pictures, Music and Videos and says whether each one is on this PC.
