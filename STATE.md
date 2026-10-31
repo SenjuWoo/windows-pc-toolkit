@@ -32,7 +32,9 @@ Deliver a safe, usable native Windows toolkit for fresh installs and existing PC
 
 ## First unfinished step
 
-Nothing blocks the 3.1.1 handoff. Optional follow-ups, in priority order:
+Nothing blocks the 3.1.1 handoff. The 2026-10-31 modernization blueprint was reviewed against the shipped source and **no code was applied**: none of its claimed defects reproduces here, and its architectural items are already covered by the worker-process design, the compensation-retaining undo journals and the 629-assertion harness. Verdict and the optional backlog: `docs/specs/2026-10-31-blueprint-review.md` (spec files are excluded from the payload, so this needed no release).
+
+Optional follow-ups, in priority order:
 
 1. Live end-to-end proof on a disposable VM or spare account: real OneDrive backup stop, uninstall, and app-level path recovery. Everything today is fixture and read-only evidence.
 2. If a future release ships, consider adding the app-level storage-path note (below) to `docs/ONEDRIVE_RECOVERY.md`; it is deliberately not in 3.1.1 because that would change a shipped file after publication.
