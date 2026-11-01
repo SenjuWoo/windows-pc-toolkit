@@ -1,4 +1,17 @@
+<p align="center">
+  <img src="docs/images/logo.svg" width="72" height="72" alt="Windows PC Toolkit">
+</p>
+
+<div align="center">
+
 # Windows PC Toolkit
+
+<p>
+  <a href="https://github.com/SenjuWoo/windows-pc-toolkit/releases/latest"><img src="https://img.shields.io/github/v/release/SenjuWoo/windows-pc-toolkit?label=release&color=4C7EA8&labelColor=0d1117" alt="latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4C7EA8?labelColor=0d1117" alt="MIT License"></a>
+</p>
+
+</div>
 
 **Portable gaming, cleanup, debloat, privacy and repair in one native Windows dashboard.** Built-in PowerShell and WPF; no account, installer, advertising or background agent.
 
