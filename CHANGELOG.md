@@ -1,5 +1,10 @@
 # Changelog
 
+## Toolkit 3.1.4 (2026-11-07)
+
+- The legacy optimizer repair no longer deletes or rewrites the MMCSS Games block. The previous conditional write could never work: the blanket removal loop deleted those six values first, so every repair rewrote them from a guess. The block is now journaled for undo, skipped by the deletion loop and left untouched, because Microsoft documents the value ranges while the shipping defaults differ by build. Other legacy overrides are still removed with the same snapshot.
+- Regression coverage runs the real snapshot-then-remove order against a disposable HKCU fixture: a custom value, a non-default scheduling category, a custom Clock Rate and a missing value all survive, the six values appear in the journal, a mid-operation failure restores from it, and a failed snapshot removes nothing.
+
 ## Toolkit 3.1.3 (2026-11-07)
 
 - Legacy optimizer repair no longer forces SysMain startup or turns on RSS/RSC for each adapter. A cleanup removes the v3.x overrides it can identify, reports the current SysMain state and leaves adapter offloads at the driver setting, because the value before the old tweak was never recorded. MMCSS Games values are written only when they differ from Microsoft's documented defaults, and the snapshot taken first still restores a custom setup.

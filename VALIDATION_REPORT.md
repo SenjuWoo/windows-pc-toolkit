@@ -1,5 +1,17 @@
 # Validation report
 
+## 3.1.4 verification — November 7, 2026
+
+Correctness fix for the MMCSS part of the legacy optimizer repair.
+
+- The 3.1.3 conditional write could not work: `$targets` contains the six Games values, so the deletion loop removed them before the comparison, and every repair rewrote all five defaults. The repair now journals the block, skips it in the deletion loop and never rewrites it. Microsoft documents the value ranges, and the shipping defaults differ by build; this PC reports `Scheduling Category=High`, `SFIO Priority=High`, `Background Only=False`, so the "documented default" that 3.1.3 wrote was wrong.
+- New regression block (`tests/Test_FinalAuditGaming.ps1`) runs the real snapshot-then-remove order against a disposable HKCU fixture rather than mocking deletion: a custom `Priority`, a non-default `Scheduling Category`, `Background Only=False`, a custom `Clock Rate` and an absent `SFIO Priority` all survive; all six values appear in the journal; the other legacy targets are removed; an injected mid-operation failure restores from the journal; a failed snapshot aborts with zero mutations.
+- Proof of the defect: the same test run against the shipped 3.1.3 module (only its hardcoded Games path redirected into the fixture) fails with `TEST FAILED: A custom MMCSS value survives the repair`. The corrected module passes.
+- `Validate_All.ps1` passes for 46 PowerShell files. The native suite passes 659 assertions in nine suites: OneDrive 45, base 117, Suite 62, Cleaner 57, DNS/privacy 104, repair/gaming 49, launchers 125, final gaming 35, final Fixer 65. Smoke test: 66 controls, 20 optimization choices.
+- No live SysMain, adapter, DNS, OneDrive, registry or file change was made while validating.
+
+Remaining limits are unchanged: no live OneDrive migration or uninstall, DNS change, Windows servicing, repair or performance proof; interactive UAC untested. The repair still deletes other legacy values to absence, which is reversible through its snapshot but is not proof the user wanted them gone.
+
 ## 3.1.3 verification — November 7, 2026
 
 Safety hardening for the legacy optimizer repair, the OneDrive folder gate and encrypted DNS.

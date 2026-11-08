@@ -74,33 +74,62 @@ try {
         Check $blocked 'Linked gaming state root is rejected'
         Check (@(Get-ChildItem -LiteralPath $outside -Force).Count -eq 0) 'Linked state target remains untouched'
     } finally {[IO.Directory]::Delete($linked)}
-    # v3.x repair must remove leftover overrides, not impose configuration. SysMain and
-    # adapter offloads are the user's choice; MMCSS defaults are written only when they differ.
+    # A real HKCU fixture runs the actual snapshot-then-delete order: the Games block is
+    # journaled, never deleted or rewritten, while the other legacy targets are removed.
+    $gamesKey=Join-Path $key 'Tasks\Games'
+    $legacyKey=Join-Path $key 'Legacy'
+    New-Item -Path $gamesKey -Force|Out-Null
+    New-Item -Path $legacyKey -Force|Out-Null
+    Set-RegistryValueExact $gamesKey 'GPU Priority' 8 DWord
+    Set-RegistryValueExact $gamesKey 'Priority' 5 DWord
+    Set-RegistryValueExact $gamesKey 'Scheduling Category' 'High' String
+    Set-RegistryValueExact $gamesKey 'Background Only' 'False' String
+    Set-RegistryValueExact $gamesKey 'Clock Rate' 20000 DWord
+    Set-RegistryValueExact $legacyKey 'NtfsMemoryUsage' 2 DWord
+    Set-RegistryValueExact $legacyKey 'NetworkThrottlingIndex' 0 DWord
     & $module {
-        $script:RepairCalls=@()
-        function script:Get-GamingRegistryTargets { @() }
-        function script:New-GamingSnapshot { param($Reason,$RegistryTargets,[switch]$IncludeServices,[switch]$IncludeNetwork,[switch]$IncludeBcd) $script:RepairCalls+='snapshot' }
-        function script:Remove-RegistryValueIfPresent { param($Path,$Name) $script:RepairCalls+=('remove:'+$Name) }
-        function script:Get-RegistryValueState { param($Path,$Name)
-            if($Name -eq 'Background Only'){return [pscustomobject]@{Path=$Path;Name=$Name;Exists=$true;Kind='String';Value='True'}}
-            if($Name -eq 'GPU Priority'){return [pscustomobject]@{Path=$Path;Name=$Name;Exists=$true;Kind='DWord';Value=18}}
-            return [pscustomobject]@{Path=$Path;Name=$Name;Exists=$false;Kind='DWord';Value=$null}
+        param($gamesKey,$legacyKey)
+        $script:GamingGamesTaskPath=$gamesKey
+        $script:StateRoot=Join-Path $env:TEMP ('Gaming repair '+[guid]::NewGuid().ToString('N'))
+        $script:SnapshotRoot=Join-Path $script:StateRoot 'Snapshots'
+        function script:Get-GamingRegistryTargets {
+            @(@{Path=$gamesKey;Name='GPU Priority'},@{Path=$gamesKey;Name='Priority'},@{Path=$gamesKey;Name='Scheduling Category'},@{Path=$gamesKey;Name='SFIO Priority'},@{Path=$gamesKey;Name='Background Only'},@{Path=$gamesKey;Name='Clock Rate'},@{Path=$legacyKey;Name='NtfsMemoryUsage'},@{Path=$legacyKey;Name='NetworkThrottlingIndex'})
         }
-        function script:Set-RegistryValueExact { param($Path,$Name,$Value,$Kind) $script:RepairCalls+=('set:'+$Name+'='+$Value) }
-        function script:Remove-GamingBcdOverrides { $script:RepairCalls+='bcd' }
-        function script:Get-Service { param($Name) [pscustomobject]@{Status='Running';StartType='Disabled'} }
-        function script:Set-Service { param($Name,$StartupType) throw 'SysMain startup must not be forced' }
-        function script:Start-Service { param($Name) throw 'SysMain must not be started' }
-        function script:Enable-NetAdapterRss { param($Name) throw 'RSS must not be enabled by a cleanup' }
-        function script:Enable-NetAdapterRsc { param($Name) throw 'RSC must not be enabled by a cleanup' }
-    }
+        function script:Get-CimInstance { param($ClassName,$Filter) [pscustomobject]@{StartMode='Auto';State='Running'} }
+        function script:Get-BcdOverrideStates { @() }
+        function script:Get-NetworkAdapterStates { @() }
+        # The earlier service test leaves throwing stubs behind; restoring this journal needs no-ops.
+        function script:Set-Service { param($Name,$StartupType) }
+        function script:Start-Service { param($Name) }
+        $script:RemoveCount=0
+        $script:RealRemove=(Get-Command Remove-RegistryValueIfPresent -CommandType Function).ScriptBlock
+    } $gamesKey $legacyKey
     Invoke-LegacyOptimizerRepair
-    $repair=& $module {$script:RepairCalls}
-    Check ($repair -contains 'snapshot') 'Legacy repair snapshots before writing'
-    Check ($repair -contains 'set:GPU Priority=8') 'A custom MMCSS value is reset to the documented default'
-    Check (-not ($repair -contains 'set:Background Only=True')) 'An MMCSS value already at the default is not rewritten'
-    Check (@($repair | Where-Object { $_ -like 'set:*' -and $_ -notmatch '^set:(GPU Priority=8|Priority=2|Scheduling Category=Medium|SFIO Priority=Normal)$' }).Count -eq 0) 'Only documented MMCSS defaults are written'
-    Check (-not [bool](& $module { Get-Command Enable-GamingSupportedOffloads -ErrorAction SilentlyContinue })) 'Legacy cleanup no longer applies adapter offloads'
+    Check ((Get-RegistryValueState $gamesKey 'Priority').Value -eq 5) 'A custom MMCSS value survives the repair'
+    Check ((Get-RegistryValueState $gamesKey 'Scheduling Category').Value -ceq 'High') 'A non-default scheduling category survives the repair'
+    Check ((Get-RegistryValueState $gamesKey 'Background Only').Value -ceq 'False') 'A non-default background flag survives the repair'
+    Check ((Get-RegistryValueState $gamesKey 'Clock Rate').Value -eq 20000) 'Clock Rate survives the repair'
+    Check (-not (Get-RegistryValueState $gamesKey 'SFIO Priority').Exists) 'A missing MMCSS value stays missing instead of being invented'
+    Check (-not (Get-RegistryValueState $legacyKey 'NtfsMemoryUsage').Exists -and -not (Get-RegistryValueState $legacyKey 'NetworkThrottlingIndex').Exists) 'Other legacy overrides are still removed'
+    $journal=& $module { Get-Content -LiteralPath (Get-LatestGamingSnapshotPath) -Raw | ConvertFrom-Json }
+    $journalGames=@($journal.Registry | Where-Object { $_.Path -eq $gamesKey })
+    Check ($journalGames.Count -eq 6 -and (@($journalGames | Where-Object { $_.Name -eq 'Clock Rate' -and $_.Value -eq 20000 }).Count -eq 1)) 'All six Games values are journaled before the cleanup'
+
+    # A failure halfway through removal leaves the journal usable: restoring it returns the value.
+    Set-RegistryValueExact $legacyKey 'NtfsMemoryUsage' 2 DWord
+    Set-RegistryValueExact $legacyKey 'NetworkThrottlingIndex' 0 DWord
+    & $module { function script:Remove-RegistryValueIfPresent { param($Path,$Name) $script:RemoveCount++; if($script:RemoveCount -eq 2){throw 'Injected mid-operation failure'}; & $script:RealRemove $Path $Name } }
+    $midFailed=$false; try { Invoke-LegacyOptimizerRepair } catch { $midFailed=$_.Exception.Message -eq 'Injected mid-operation failure' }
+    Check $midFailed 'A mid-operation failure aborts the repair'
+    Restore-LatestGamingSnapshot
+    Check ((Get-RegistryValueState $legacyKey 'NtfsMemoryUsage').Value -eq 2 -and (Get-RegistryValueState $legacyKey 'NetworkThrottlingIndex').Value -eq 0) 'The recorded journal restores values removed before the failure'
+
+    # No journal, no mutation.
+    Set-RegistryValueExact $legacyKey 'NtfsMemoryUsage' 2 DWord
+    & $module { function script:New-GamingSnapshot { throw 'Injected snapshot failure' } }
+    $snapFailed=$false; try { Invoke-LegacyOptimizerRepair } catch { $snapFailed=$_.Exception.Message -eq 'Injected snapshot failure' }
+    Check $snapFailed 'A failed snapshot aborts the repair'
+    Check ((Get-RegistryValueState $legacyKey 'NtfsMemoryUsage').Value -eq 2) 'A failed snapshot removes nothing'
     Write-Host "PASS: $checks final gaming audit checks. Only disposable HKCU/files and intercepted adapters were used." -ForegroundColor Green
 } finally {
     Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
