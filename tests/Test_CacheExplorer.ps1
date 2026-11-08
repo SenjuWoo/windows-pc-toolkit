@@ -10,7 +10,9 @@ $root = $Root
 $fixture = Join-Path $env:TEMP ('ToolkitCache_' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($fixture)
 try {
-    . (Join-Path $root 'pc-cleaner\PC_Cleaner.ps1') -Action Library
+    $cleaner = Join-Path $root 'pc-cleaner\PC_Cleaner.ps1'
+    if (-not (Test-Path -LiteralPath $cleaner)) { $cleaner = Join-Path $root 'Pc Cleaner\PC_Cleaner.ps1' }
+    . $cleaner -Action Library
     $StateRoot = Join-Path $fixture 'State'
     $LogRoot = Join-Path $fixture 'Logs'
     $RegBackupRoot = Join-Path $fixture 'RegBackup'
