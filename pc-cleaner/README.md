@@ -1,4 +1,4 @@
-# PC Cleaner 1.3.0
+# PC Cleaner 1.4.1
 
 Scan-first cleanup and targeted registry repair. Use the [dashboard](../README.md) or `Run_As_Admin.bat` for the detailed console. Extract the complete toolkit; registry care uses shared root `Modules`.
 
@@ -14,17 +14,19 @@ Protected names include cookies, logins, history, bookmarks, sessions, app stora
 
 All report-only categories appear in the scan. Windows.old, patcher backups, AI stores, Recall data and Windows Update downloads cannot be deleted by any cleaner profile or an older category descriptor. Delivery Optimization reports the measured before/after reduction rather than claiming all cached files were removed; command failures remain failures in the run report.
 
-## Cache Explorer (v1.2.0)
+## Cache Explorer (v1.4.1)
 
 Menu `[8]` in the console opens a read-only scan of caches that are usually safe to drop, grouped by **AI**, **Gaming** and **Dev**. Nothing runs because a tool is installed: a category appears only when its folder exists, and deletion always asks first.
 
 | Section | Category | Default | What it touches |
 | --- | --- | --- | --- |
 | AI | Antigravity editor caches | SAFE | `Cache`, `Code Cache`, `CachedData`, `GPUCache` under `%APPDATA%\Antigravity`, and only when the sibling `User` folder proves the layout |
+| AI | Codex catalog cache | REPORT | `cache\codex_app_directory`, `codex_apps_server_info`, `codex_apps_tools`, `remote_plugin_catalog`. Regenerable, but the `.codex` home is protected wholesale: sessions, SQLite state, config and secrets share the tree |
+| AI | Claude Code shell snapshots | REPORT | `snapshots`-style `snapshot-bash-*.sh` shell state. Regenerable, but it lives under the protected `.claude` home |
 | AI | Codex / Claude / Hermes home | REPORT | Measured, never deleted. Sessions, SQLite state, `.claude.json`, memories, skills, `tmp\arg0` and `state.db` are outside the cleaner's authority |
-| Gaming | Steam shader cache | STRICT | `steamapps\shadercache` in every library found through `libraryfolders.vdf`; `common`, `compatdata` and manifests are never included |
+| Gaming | Steam shader cache | STRICT | `steamapps\shadercache` in every library found through `libraryfolders.vdf`, including the default `Program Files (x86)` install. The exact folder Steam reports is the only Program Files path the cleaner may touch; `common`, `compatdata`, installers and manifests are never included |
 | Gaming | Steam staging temp | REPORT | `steamapps\temp` can hold an unfinished update, so it is measured and never removed |
-| Gaming | VRChat cache | CAREFUL | the `config.json` `cache_directory` when it passes the cleanup-root validator, else `LocalLow\VRChat\VRChat\Cache-WindowsPlayer`; `config.json`, screenshots and moderation data stay |
+| Gaming | VRChat cache | CAREFUL | the `config.json` `cache_directory` when it passes the cleanup-root validator, else `LocalLow\VRChat\VRChat\Cache-WindowsPlayer`; `config.json`, screenshots and moderation data stay. The location is re-read before deletion and a config that moved, vanished or stopped parsing refuses the row instead of falling back |
 | Gaming | Epic Launcher web cache | REPORT | `Saved\webcache*`; the browser `WebCache` guard covers this name, so clear it from the launcher |
 | Gaming | Roblox / Minecraft logs | SAFE | `*.log*` older than seven days; autosaves, saves, mods and packs stay |
 | Dev | pip / npm / NuGet HTTP caches | SAFE | Download caches only; the NuGet global packages folder is not included |
@@ -33,6 +35,17 @@ Menu `[8]` in the console opens a read-only scan of caches that are usually safe
 | Dev | pnpm store | REPORT | Hard-linked into every project; `pnpm store prune` is the right tool |
 | Gaming | GPU driver + DirectX shader caches | STRICT | `NVIDIA\DXCache`, `NVIDIA\GLCache`, `AMD\DxCache`, `D3DSCache`; opt in, recompiles cause first-launch stutter |
 | Dev | Unity project `Library` | REPORT | Not enumerated: project paths cannot be discovered safely |
+
+### What each risk level means
+
+| Level | Confirmation | What happens |
+| --- | --- | --- |
+| SAFE | One `y` | Download caches and logs the owning application recreates; nothing user-authored is in scope |
+| CAREFUL | One `y` plus the category id | Data the application rebuilds at a cost (VRChat re-downloads avatars); configuration and user files stay |
+| STRICT | The category id typed back | Data whose loss is visible: shader and pipeline caches recompile on next launch, Unreal and Gradle rebuild from source |
+| REPORT | None, deletion refused | Measured and explained only. Used where a folder is disposable by name but its parent tree holds credentials, sessions or user data, or where the deletion guard would refuse the path anyway |
+
+A row is shown as cleanable only when the scan and the deletion guard agree: the same `Test-CleanupRoot` policy that measures a category is the one that runs at delete time. Steam's shader cache is the single exception to the Program Files rule, and it is granted by an exact match against the libraries Steam reports live, not by a folder name.
 
 Every row carries its source and rebuild impact. **Clean SAFE caches** only offers SAFE rows whose layout is verified and whose app is closed; STRICT and CAREFUL rows need the category id typed back. **Export JSON report** writes the measurement, not a promise of reclaimed space.
 

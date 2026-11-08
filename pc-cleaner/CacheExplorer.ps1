@@ -37,10 +37,22 @@ function Get-SteamLibraryRoots {
     return @($local | Select-Object -Unique)
 }
 
+function Get-SteamShaderRoots {
+    # The exact folders Steam reports as its own shader caches. Recomputed on every check, so a
+    # forged or renamed path cannot inherit the exception this list grants.
+    param([string[]]$SteamRoots)
+    $libraryRoots = if ($SteamRoots) { @($SteamRoots) } else { @(Get-SteamLibraryRoots) }
+    $out = foreach ($root in $libraryRoots) {
+        $path = Join-Path $root 'steamapps\shadercache'
+        if (Test-Path -LiteralPath $path -PathType Container) { [IO.Path]::GetFullPath($path).TrimEnd('\') }
+    }
+    return @($out)
+}
+
 function Test-CleanupRoot {
     # One validator for every custom or catalog-derived cleanup root. It answers "is this a
     # narrow, dedicated, link-free folder", never "does the name look like a cache".
-    param([string]$Path, [switch]$AllowAnyName)
+    param([string]$Path, [switch]$AllowAnyName, [string]$Policy = 'Generic', [string[]]$SteamRoots)
     $fail = { param($why) [pscustomobject]@{ Ok = $false; Reason = $why } }
     if (-not $Path) { return & $fail 'Empty path' }
     try { $full = [IO.Path]::GetFullPath($Path) } catch { return & $fail 'Path cannot be resolved' }
@@ -51,6 +63,13 @@ function Test-CleanupRoot {
     if (-not (Test-CleanPathWithoutLinks $full)) { return & $fail 'Link in the path' }
     if (Test-IsProtectedPath $full) { return & $fail 'Protected folder name in the path' }
     if ([IO.Path]::GetPathRoot($full) -and ([IO.DriveInfo]::new([IO.Path]::GetPathRoot($full)).DriveType -ne 'Fixed')) { return & $fail 'Not a local fixed drive' }
+
+    if ($Policy -eq 'SteamShader') {
+        # Steam normally lives under Program Files, so the shadercache folder Steam itself reports is
+        # the one catalog path allowed there. It must match the live list exactly; nothing else qualifies.
+        if (@(Get-SteamShaderRoots -SteamRoots $SteamRoots) -notcontains $full.TrimEnd('\\')) { return & $fail 'Not a verified Steam shader cache' }
+        return [pscustomobject]@{ Ok = $true; Reason = '' }
+    }
 
     $blockedUnder = New-Object System.Collections.Generic.List[string]
     foreach ($path in @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData)) {
@@ -96,18 +115,27 @@ function Test-CleanupRoot {
     return [pscustomobject]@{ Ok = $true; Reason = '' }
 }
 
-function Get-VRChatCachePath {
-    # Uses the configured cache_directory when it is a local fixed path; otherwise the default.
+function Get-VRChatCacheState {
+    # One place decides what VRChat's cache location currently is, and whether that answer can be
+    # trusted. A config that exists but cannot be read is 'invalid': that proves nothing about the
+    # effective location, so callers must fail closed instead of assuming the default.
     param([string]$ConfigPath)
     $default = Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\Cache-WindowsPlayer'
     $config = if ($ConfigPath) { $ConfigPath } else { Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\config.json' }
-    if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { return $default }
-    try { $json = Get-Content -LiteralPath $config -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $default }
+    if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { return [pscustomobject]@{ State = 'absent'; Path = [IO.Path]::GetFullPath($default) } }
+    try { $json = Get-Content -LiteralPath $config -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return [pscustomobject]@{ State = 'invalid'; Path = $null } }
     $custom = $json.cache_directory
-    if (-not $custom) { return $default }
-    # The configured path is honoured, but it is only deletable when Test-CleanupRoot accepts it;
-    # an unsafe path is shown and kept, never replaced by a different location.
-    try { return [IO.Path]::GetFullPath($custom) } catch { return $default }
+    if (-not $custom) { return [pscustomobject]@{ State = 'default'; Path = [IO.Path]::GetFullPath($default) } }
+    try { return [pscustomobject]@{ State = 'custom'; Path = [IO.Path]::GetFullPath([string]$custom) } } catch { return [pscustomobject]@{ State = 'invalid'; Path = $null } }
+}
+
+function Get-VRChatCachePath {
+    # The path a scan would use. Only a config that parses counts; anything else falls back to the
+    # documented default for display, and Get-VRChatCacheState reports 'invalid' so cleanup refuses.
+    param([string]$ConfigPath)
+    $state = Get-VRChatCacheState -ConfigPath $ConfigPath
+    if ($state.Path) { return $state.Path }
+    return [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\Cache-WindowsPlayer'))
 }
 
 function Get-CacheCatalog {
@@ -115,8 +143,8 @@ function Get-CacheCatalog {
     $codex  = if ($env:CODEX_HOME)  { $env:CODEX_HOME }  else { Join-Path $U '.codex' }
     $claude = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $U '.claude' }
     $hermes = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $L 'hermes' }
-    $shaderPaths = @(); $steamTemp = @()
-    foreach ($root in @(Get-SteamLibraryRoots)) {
+    $shaderPaths = @(); $steamTemp = @(); $steamRoots = @(Get-SteamLibraryRoots)
+    foreach ($root in $steamRoots) {
         $shaderPaths += (Join-Path $root 'steamapps\shadercache')
         $steamTemp += (Join-Path $root 'steamapps\temp')
     }
@@ -127,13 +155,19 @@ function Get-CacheCatalog {
             Impact='Rebuilt on next start. User, globalStorage, workspaceStorage, History and extensions are excluded.'; Source='Sibling User folder proves the layout' }
         [pscustomobject]@{ Id='CodexState'; Section='AI'; Label='Codex home (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
             Paths=@((Join-Path $codex 'log')); Impact='Sessions, archived sessions, SQLite state, config, credentials, plugins and tmp\arg0 are never touched.'; Source='CODEX_HOME / %USERPROFILE%\.codex' }
+        [pscustomobject]@{ Id='CodexCatalogCache'; Section='AI'; Label='Codex app and tool catalog cache (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
+            Paths=@((Join-Path $codex 'cache\codex_app_directory'),(Join-Path $codex 'cache\codex_apps_server_info'),(Join-Path $codex 'cache\codex_apps_tools'),(Join-Path $codex 'cache\remote_plugin_catalog'));
+            Impact='Downloaded app, tool and plugin catalogs; Codex fetches them again on next start. Measured only: the .codex home is protected wholesale because sessions, SQLite state, config and secrets share the tree.'; Source='%USERPROFILE%\.codex\cache subfolders, verified on disk' }
+        [pscustomobject]@{ Id='ClaudeShellSnapshots'; Section='AI'; Label='Claude Code shell snapshots (report only)'; Risk='REPORT'; Delete=$false; AgeDays=7;
+            Paths=@((Join-Path $claude 'shell-snapshots'));
+            Impact='snapshot-bash-*.sh shell state, rewritten for each session, but it lives in the protected .claude home; measured and kept. Clear old snapshots from Claude itself if needed.'; Source='Claude Code config directory, verified on disk' }
         [pscustomobject]@{ Id='ClaudeState'; Section='AI'; Label='Claude home (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
             Paths=@((Join-Path $claude 'shell-snapshots')); Impact='.claude.json, settings, projects, sessions, plugins, permissions and memories are never touched.'; Source='CLAUDE_CONFIG_DIR / %USERPROFILE%\.claude' }
         [pscustomobject]@{ Id='HermesScratch'; Section='AI'; Label='Hermes scratch cache (report only)'; Risk='REPORT'; Delete=$false; AgeDays=1;
             Paths=@((Join-Path $hermes 'cache\scratch')); Impact='Hermes prunes entries idle for 24h itself; state.db, sessions, skills and profiles are never touched.'; Source='Hermes-managed lifecycle' }
 
         [pscustomobject]@{ Id='SteamShaderCache'; Section='Gaming'; Label='Steam shader cache (per library)'; Risk='STRICT'; Delete=$true; AgeDays=0; RequireProcess='steam';
-            Paths=$shaderPaths; Impact='Shaders recompile on next launch: stutter and possible re-download. Never touches common, compatdata or manifests.'; Source='Steam support: shader cache can be rebuilt' }
+            Paths=$shaderPaths; SteamRoots=$steamRoots; RootPolicy='SteamShader'; Impact='Shaders recompile on next launch: stutter and possible re-download. Never touches common, compatdata or manifests.'; Source='Steam support: shader cache can be rebuilt' }
         [pscustomobject]@{ Id='SteamStaging'; Section='Gaming'; Label='Steam staging temp (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
             Paths=$steamTemp; Impact='An interrupted update can leave files here that Steam still needs; nothing is removed.'; Source='steamapps\temp' }
         [pscustomobject]@{ Id='VRChatCache'; Section='Gaming'; Label='VRChat downloaded content cache'; Risk='CAREFUL'; Delete=$true; AgeDays=0; RequireProcess='VRChat'; RootPolicy='DedicatedCache';
@@ -217,11 +251,15 @@ function Get-CacheFilesBounded {
 function Get-CacheEntryState {
     param($Entry)
     if ($Entry.Signature -and -not (Test-Path -LiteralPath $Entry.Signature)) { return 'Layout not verified on this PC' }
-    if ($Entry.RootPolicy -eq 'DedicatedCache') {
+    if ($Entry.RootPolicy) {
+        # The entry's own policy decides, so a row that advertises cleanup can actually be cleaned.
         foreach ($path in @($Entry.Paths)) {
-            $verdict = Test-CleanupRoot -Path $path
+            $verdict = Test-CleanupRoot -Path $path -Policy $Entry.RootPolicy -SteamRoots $Entry.SteamRoots
             if (-not $verdict.Ok) { return ('Cache location refused: ' + $verdict.Reason) }
         }
+    }
+    if ($Entry.Id -eq 'VRChatCache' -and (Get-VRChatCacheState -ConfigPath $Entry.ConfigPath).State -eq 'invalid') {
+        return 'VRChat config.json cannot be read, so the cache location is unverified'
     }
     if ($Entry.RequireProcess -and @(Get-Process -Name $Entry.RequireProcess -ErrorAction SilentlyContinue).Count) { return "$($Entry.RequireProcess) is running" }
     return ''
@@ -247,7 +285,12 @@ function Get-CacheEntryMeasure {
             }
             continue
         }
+        # A row the deletion guard would refuse must not be measured as cleanable either.
         if (-not (Test-CleanPathWithoutLinks $target.Path)) { continue }
+        if ($Entry.RootPolicy) {
+            $policyVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $Entry.RootPolicy -SteamRoots $Entry.SteamRoots
+            if (-not $policyVerdict.Ok) { continue }
+        }
         $usable++
         $files = @(Get-CacheFilesBounded -Roots $roots -MaxFiles $MaxFiles -Counter $counter)
         foreach ($file in $files) {
@@ -323,19 +366,28 @@ function Export-CacheScan {
 }
 
 function Test-CacheEntryFresh {
-    # Execution-time revalidation. A scan row is a claim about the past: by the time the operator
-    # confirms, the configured location may have moved. Only a config that still parses counts;
-    # an unreadable or absent config proves nothing either way, so the root check decides.
-    param($Entry)
+    # Execution-time revalidation. A scan row is a claim about the past, so the current effective
+    # configuration has to be re-proven. A config that vanished, stopped parsing or lost its path
+    # proves nothing, and "cannot prove" is a refusal, not an acceptance.
+    param($Entry, [string]$ConfigPath)
     if ($Entry.Id -ne 'VRChatCache') { return $null }
-    $config = Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\config.json'
-    if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { return $null }
-    try { $json = Get-Content -LiteralPath $config -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $null }
-    if (-not $json.cache_directory) { return $null }
-    try { $configured = [IO.Path]::GetFullPath($json.cache_directory) } catch { return 'VRChat cache path cannot be resolved' }
-    foreach ($path in @($Entry.Paths)) {
-        if ([string]::Equals([IO.Path]::GetFullPath($path).TrimEnd('\'), $configured.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    $default = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\Cache-WindowsPlayer')).TrimEnd('\')
+    $state = Get-VRChatCacheState -ConfigPath $(if ($ConfigPath) { $ConfigPath } else { $Entry.ConfigPath })
+    $scanned = @($Entry.Paths | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') })
+    $isDefaultRow = (@($scanned | Where-Object {
+                [string]::Equals($_, $default, [StringComparison]::OrdinalIgnoreCase)
+            }).Count -eq $scanned.Count)
+
+    if ($state.State -eq 'invalid') {
+        if ($isDefaultRow) { return 'VRChat config.json cannot be read, so the cache location cannot be verified; fix or remove the file and rescan.' }
+        return 'VRChat cache location cannot be verified; rescan.'
     }
+    if ($state.State -in @('absent', 'default')) {
+        if ($isDefaultRow) { return $null }
+        return 'VRChat cache location changed since the scan; rescan.'
+    }
+    $configured = $state.Path.TrimEnd('\')
+    if (@($scanned | Where-Object { [string]::Equals($_, $configured, [StringComparison]::OrdinalIgnoreCase) }).Count) { return $null }
     return 'VRChat cache location changed since the scan; rescan.'
 }
 
@@ -357,7 +409,7 @@ function Invoke-CacheClean {
             else { $result.Skipped++ }
             continue
         }
-        $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName
+        $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $(if ($Entry.RootPolicy) { $Entry.RootPolicy } else { 'Generic' }) -SteamRoots $Entry.SteamRoots
         if (-not $rootVerdict.Ok) {
             $result.Skipped++
             $result.Note = 'Cache location refused: ' + $rootVerdict.Reason

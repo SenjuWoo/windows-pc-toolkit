@@ -1,7 +1,7 @@
 ﻿#requires -version 5.1
 <#
 .SYNOPSIS
-    PC Cleaner v1.4.0 - scan-first disk cleanup and registry care for Windows 10/11.
+    PC Cleaner v1.4.1 - scan-first disk cleanup and registry care for Windows 10/11.
 .DESCRIPTION
     Every category is labeled with what it is and why it is safe. Nothing is
     deleted without an explicit profile/pick and a confirmation. User data -
@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) { throw 'Run Cleaner as an administrator for your own Windows account; a different account would clean and change the wrong user profile.' }
-$Script:Version = '1.4.0'
+$Script:Version = '1.4.1'
 $script:CleanerDebugEnabled = ($Action -ne 'Library' -and ($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'))
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
