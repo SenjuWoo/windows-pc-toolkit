@@ -4,19 +4,22 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.2.0 is published and delivered.** Release commit `f18a56e5864a06411c70b24eea2d2eb62b6a4b2d`, annotated tag `v3.2.0` (tag object `b3be36919386538d2745227ddc19e0c830a54436`), published 2026-11-07. Payload re-downloaded, matched to that commit blob for blob and tested after extraction. Portable copies of 3.1.2 through 3.2.0 are in the workspace; 3.0.2 and 3.1.1 are gone.
+**3.3.0 is published and delivered.** Release commit `ee6c1075f8adfdb6819e06874db0ebae092553f5`, annotated tag `v3.3.0` (tag object `eb211968d042ff105c588143cc0bbbb67ef3aa29`), published 2026-11-07. Payload re-downloaded, matched to that commit blob for blob and tested after extraction (716 assertions). Delivered copy `Windows-PC-Toolkit-3.3.0`, 77 files.
 
 ## Published release, verified 2026-11-07
 
-- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.2.0 - not a draft, not a prerelease, tag resolves to `f18a56e5864a06411c70b24eea2d2eb62b6a4b2d`.
-- CI run `42457624683` and CodeQL analysis run `42457624820` are terminal-success on that exact SHA. PR `#19` checks all pass, including the friendly installed layout.
-- Alerts: Dependabot 0, code-scanning 0, secret-scanning 0. Code Quality unavailable and off.
-- Assets, freshly downloaded and hashed:
-  - `Windows-PC-Toolkit-3.2.0.zip` - 389,964 bytes, SHA-256 `f290f25baceaf3679adeaca8d7d146b984be0591157ac5ab33159573e78226d3`, 74 payload files.
-  - `release-provenance.json` - SHA-256 `181985ba8a63372da13fd19f949817dfd300f9b07e953484d5628a455739ad62`.
-  - `SHA256SUMS.txt` - SHA-256 `8e9e1dc20c1ca07a2e5063f9098730692f6dbcf50b8b8f083e0afd0bac49c2dd`.
-  - All three match `SHA256SUMS.txt` and GitHub's recorded digests; 0 raw mismatches against the commit.
-- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.2.0`: 74 files, `-SmokeTest` passes.
+- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.3.0 - tag resolves to `ee6c1075f8adfdb6819e06874db0ebae092553f5`.
+- CI `42460183186`, CodeQL `42460183421`, all four checks success on that SHA. PRs #21 and #22 merged.
+- Alerts 0/0/0; Code Quality unavailable.
+- `Windows-PC-Toolkit-3.3.0.zip` - 400,129 bytes, SHA-256 `4ad2d1b6b144cf8b233218d8277f69a783525fed30444a46dfdd399bef4971ba`, 77 files, 0 raw mismatches. Provenance `1ab21424...`, SHA256SUMS `9af1b999...`, both match GitHub digests.
+- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.3.0`: smoke passes.
+
+## What 3.3.0 changed
+
+- Cache scanner: wildcard directory patterns resolved as directories; bounded streaming walk; per-file age checks; eligible vs discovered bytes; unique report names; detail view with paths/source/impact; Steam from registry + every libraryfolders.vdf entry; VRChat cache_directory; Steam staging and Epic webcache report-only; Gradle/UE closed-app checks.
+- Structure: `CacheExplorer.ps1` and `SkyrimCleanup.ps1`; `PC_Cleaner.ps1` 943 lines; cleaner 1.3.0.
+- Skyrim menu `[9]`: SKSE/Papyrus logs for SE/AE and VR, SAFE/HARD, `.log`/`.logN` only, one revalidated Documents exception, cloud-synced Documents report-only, MO2/Vortex measured only.
+- Tests: 716 assertions in eleven suites (Cache Explorer 41, Skyrim 16).
 
 ## What 3.2.0 adds
 
