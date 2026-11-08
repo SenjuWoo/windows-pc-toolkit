@@ -18,7 +18,7 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-**[Download v3.4.1](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.4.0/Windows-PC-Toolkit-3.4.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.0)
+**[Download v3.4.2](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.4.0/Windows-PC-Toolkit-3.4.0.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.0)
 
 **Check OneDrive before uninstalling it.** If your folders are already local, no OneDrive sign-in is needed. If backup is active, stop it in OneDrive's Manage backup and choose **Only on my PC**; download online-only files first if prompted. That Microsoft choice removes the cloud copy, so keep an independent backup if you need both. The toolkit checks folder locations and modern local aliases, blocks uncertain locations, and rechecks before opening Installed apps. It does not uninstall OneDrive, move files or rewrite folder locations. [Recovery instructions](docs/ONEDRIVE_RECOVERY.md) · [Safety audit](docs/AUDIT_2026-10-11.md) · [Validation and limits](VALIDATION_REPORT.md).
 
@@ -118,7 +118,7 @@ Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `Ga
 | --- | ---: | --- |
 | Dashboard / core | 3.4.0 | This page |
 | Gaming Optimizer | 5.0.2 | [Gaming](pc-gaming-optimizer/README.md) |
-| PC Cleaner | 1.4.1 | [Cleanup/registry](pc-cleaner/README.md) |
+| PC Cleaner | 1.4.2 | [Cleanup/registry](pc-cleaner/README.md) |
 | Corruption Fixer | 7.2.2 | [Repair](pc-corruption-fixer/README.md) |
 | Privacy Guard | 2.1.2 | [Privacy](pc-privacy-guard/README.md) |
 | Encrypted DNS | 2.2.2 | [DNS](dns-encrypted-doh/README.md) |

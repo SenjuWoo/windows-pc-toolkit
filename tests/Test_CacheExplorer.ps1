@@ -318,7 +318,7 @@ try {
     $steamEntry = New-Entry 'SteamShaderCache' @($shader)
     $steamEntry | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
     $steamEntry | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($lib) -Force
-    $r = Invoke-CacheClean -Entry $steamEntry
+    $r = Invoke-CacheClean -Entry $steamEntry -SteamRoots @($lib)
     Check ($r.Removed -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $shader '111\shaders.bin'))) 'The Steam policy actually deletes the shader cache'
     Check (Test-Path -LiteralPath (Join-Path $common 'game.exe')) 'A sibling game installation survives the shader clean'
 
@@ -332,7 +332,7 @@ try {
     try { cmd /c mklink /J "$jc" "$outside" | Out-Null; $linked = $true } catch { $linked = $false }
     if ($linked) {
         'x' | Set-Content -LiteralPath (Join-Path $shader 'real.bin')
-        $r = Invoke-CacheClean -Entry $steamEntry
+        $r = Invoke-CacheClean -Entry $steamEntry -SteamRoots @($lib)
         Check (Test-Path -LiteralPath (Join-Path $outside 'keep.bin')) 'A junction inside the shader cache is not followed'
         if (Test-Path -LiteralPath $jc) { [IO.Directory]::Delete($jc) }
     }
@@ -372,6 +372,75 @@ try {
 
     $vrState = Get-VRChatCacheState -ConfigPath $cfgPath
     Check ($vrState.State -eq 'absent') 'An absent config is reported as absent, not as a verified default'
+
+    # 29. Multi-library Steam: an absent shader cache must not block a populated one.
+    $libA = Join-Path $fixture 'steam-A'
+    $libB = Join-Path $fixture 'steam-B'
+    $libC = Join-Path $fixture 'steam-C'
+    $shaderA = Join-Path $libA 'steamapps\shadercache'
+    $shaderB = Join-Path $libB 'steamapps\shadercache'
+    $shaderC = Join-Path $libC 'steamapps\shadercache'
+    foreach ($lib in @($libA, $libB, $libC)) { [void][IO.Directory]::CreateDirectory((Join-Path $lib 'steamapps')) }
+    [void][IO.Directory]::CreateDirectory((Join-Path $shaderA '111'))
+    [void][IO.Directory]::CreateDirectory((Join-Path $shaderB '222'))
+    'aaa' | Set-Content -LiteralPath (Join-Path $shaderA '111\a.bin')
+    'bbbb' | Set-Content -LiteralPath (Join-Path $shaderB '222\b.bin')
+    [void][IO.Directory]::CreateDirectory((Join-Path $libC 'steamapps\common\Game'))
+    'game' | Set-Content -LiteralPath (Join-Path $libC 'steamapps\common\Game\game.exe')
+
+    $twoLibs = New-Entry 'SteamShaderCache' @($shaderA, (Join-Path $libC 'steamapps\shadercache'))
+    $twoLibs | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $twoLibs | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($libA, $libC) -Force
+    Check ([string]::IsNullOrEmpty((Get-CacheEntryState $twoLibs))) 'A missing shader cache in one library does not block a populated one'
+    $r = Invoke-CacheClean -Entry $twoLibs -SteamRoots @($libA, $libC)
+    Check ($r.Removed -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $shaderA '111\a.bin'))) 'The populated library is cleaned while the empty one is skipped'
+    Check (Test-Path -LiteralPath (Join-Path $libC 'steamapps\common\Game\game.exe')) 'A library with no shader cache keeps its games'
+
+    # Two populated libraries are both cleanable.
+    $bothLibs = New-Entry 'SteamShaderCache' @($shaderA, $shaderB)
+    $bothLibs | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $bothLibs | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($libA, $libB) -Force
+    [void][IO.Directory]::CreateDirectory((Join-Path $shaderA '111'))
+    'a2' | Set-Content -LiteralPath (Join-Path $shaderA '111\a2.bin')
+    Check ([string]::IsNullOrEmpty((Get-CacheEntryState $bothLibs))) 'Two populated libraries pass validation'
+    $r = Invoke-CacheClean -Entry $bothLibs -SteamRoots @($libA, $libB)
+    Check ($r.Removed -eq 2 -and -not (Test-Path -LiteralPath (Join-Path $shaderB '222\b.bin'))) 'Both libraries are cleaned'
+
+    # 30. A library removed from Steam after the scan is refused, even though the row still lists it.
+    [void][IO.Directory]::CreateDirectory((Join-Path $shaderB '222'))
+    'stale' | Set-Content -LiteralPath (Join-Path $shaderB '222\stale.bin')
+    $staleEntry = New-Entry 'SteamShaderCache' @($shaderA, $shaderB)
+    $staleEntry | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $staleEntry | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($libA, $libB) -Force
+    $r = Invoke-CacheClean -Entry $staleEntry -SteamRoots @($libA)
+    Check (Test-Path -LiteralPath (Join-Path $shaderB '222\stale.bin')) 'A library missing from the live mapping is refused at delete time'
+
+    # 31. A row with nothing present is not advertised as cleanable.
+    $emptyEntry = New-Entry 'SteamShaderCache' @($shaderC)
+    $emptyEntry | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $emptyEntry | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($libC) -Force
+    Check ((Get-CacheEntryState $emptyEntry) -eq 'No cache folder present on this PC') 'A row with no existing folder is reported, not cleanable'
+
+    # 32. Forged folders and junctions stay refused under the multi-library policy.
+    $forged = Join-Path $libB 'steamapps\shadercache-forged'
+    [void][IO.Directory]::CreateDirectory($forged)
+    'f' | Set-Content -LiteralPath (Join-Path $forged 'f.bin')
+    $forgedEntry = New-Entry 'SteamShaderCache' @($forged)
+    $forgedEntry | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $forgedEntry | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($libA, $libB) -Force
+    $r = Invoke-CacheClean -Entry $forgedEntry -SteamRoots @($libA, $libB)
+    Check ($r.Removed -eq 0 -and (Test-Path -LiteralPath (Join-Path $forged 'f.bin'))) 'A folder merely named like a shader cache is refused'
+
+    $junctionTarget = Join-Path $fixture 'junction-store'
+    [void][IO.Directory]::CreateDirectory($junctionTarget)
+    'keep' | Set-Content -LiteralPath (Join-Path $junctionTarget 'keep.bin')
+    $linkShader = Join-Path $libA 'steamapps\shaderlink'
+    $made = $false
+    try { cmd /c mklink /J "$linkShader" "$junctionTarget" | Out-Null; $made = $true } catch { $made = $false }
+    if ($made) {
+        Check (-not (Test-CleanupRoot -Path $linkShader -AllowAnyName -Policy SteamShader -SteamRoots @($libA)).Ok) 'A junction is never accepted as a shader cache'
+        [IO.Directory]::Delete($linkShader)
+    }
 
     Write-Host "PASS: $checks cache explorer checks. Fixtures under TEMP only." -ForegroundColor Green
 } finally {

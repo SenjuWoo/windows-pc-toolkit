@@ -1,5 +1,12 @@
 # Changelog
 
+## Toolkit 3.4.2 (2026-11-08)
+
+- Fixed the Steam shader cache blocking itself across libraries: the catalog listed `steamapps\shadercache` for every Steam library even when the folder did not exist, and validation rejected the missing ones, so one empty library disabled the whole category while the scan still showed bytes. Only libraries with a shader cache are listed now, and missing folders are skipped instead of refusing the row.
+- Steam roots are re-resolved immediately before deletion instead of trusting the scan. A library removed, unplugged or repointed after the scan is refused and its files survive; a library that only exists in the stale row is skipped.
+- A row whose folders are all absent reports "No cache folder present on this PC" rather than appearing cleanable.
+- Tests: 85 cache explorer checks (was 76), covering one populated plus one empty library, two populated libraries, a changed library mapping, a forged folder and a junction. Suite total 779.
+
 ## Toolkit 3.4.1 (2026-11-08)
 
 - Fixed the Steam shader-cache row: it was discovered under `Program Files (x86)` and then refused by the Program Files guard, so it could never be cleaned. A Steam policy now accepts exactly the shadercache folders Steam reports live; the guard is unchanged for every other path, and `steamapps`, `common`, `compatdata`, installers and manifests stay out of reach.

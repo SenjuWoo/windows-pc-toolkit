@@ -145,7 +145,10 @@ function Get-CacheCatalog {
     $hermes = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $L 'hermes' }
     $shaderPaths = @(); $steamTemp = @(); $steamRoots = @(Get-SteamLibraryRoots)
     foreach ($root in $steamRoots) {
-        $shaderPaths += (Join-Path $root 'steamapps\shadercache')
+        # A library without a shader cache is normal (nothing installed, or shader caching off).
+        # Listing it would make one absent folder refuse the whole category.
+        $shader = Join-Path $root 'steamapps\shadercache'
+        if (Test-Path -LiteralPath $shader -PathType Container) { $shaderPaths += $shader }
         $steamTemp += (Join-Path $root 'steamapps\temp')
     }
 
@@ -253,10 +256,16 @@ function Get-CacheEntryState {
     if ($Entry.Signature -and -not (Test-Path -LiteralPath $Entry.Signature)) { return 'Layout not verified on this PC' }
     if ($Entry.RootPolicy) {
         # The entry's own policy decides, so a row that advertises cleanup can actually be cleaned.
+        # Only folders that exist are judged: a missing optional folder is skipped, an existing one
+        # must still pass the full policy, and a row with nothing present is not cleanable at all.
+        $existing = 0
         foreach ($path in @($Entry.Paths)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Container)) { continue }
+            $existing++
             $verdict = Test-CleanupRoot -Path $path -Policy $Entry.RootPolicy -SteamRoots $Entry.SteamRoots
             if (-not $verdict.Ok) { return ('Cache location refused: ' + $verdict.Reason) }
         }
+        if ($existing -eq 0) { return 'No cache folder present on this PC' }
     }
     if ($Entry.Id -eq 'VRChatCache' -and (Get-VRChatCacheState -ConfigPath $Entry.ConfigPath).State -eq 'invalid') {
         return 'VRChat config.json cannot be read, so the cache location is unverified'
@@ -392,7 +401,9 @@ function Test-CacheEntryFresh {
 }
 
 function Invoke-CacheClean {
-    param($Entry)
+    # -SteamRoots exists for fixtures. Production always uses the live list, so a library that was
+    # removed, unplugged or repointed after the scan cannot be cleaned through a stale row.
+    param($Entry, [string[]]$SteamRoots)
     $result = [pscustomobject]@{ Id = $Entry.Id; Status = 'Completed'; Removed = 0; Skipped = 0; Bytes = [long]0; Note = '' }
     if (-not $Entry.Delete) { $result.Status = 'Skipped'; $result.Note = 'Review only; kept all files.'; return $result }
     $stale = Test-CacheEntryFresh $Entry
@@ -409,7 +420,8 @@ function Invoke-CacheClean {
             else { $result.Skipped++ }
             continue
         }
-        $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $(if ($Entry.RootPolicy) { $Entry.RootPolicy } else { 'Generic' }) -SteamRoots $Entry.SteamRoots
+        $liveSteamRoots = if ($SteamRoots) { @($SteamRoots) } elseif ($Entry.RootPolicy -eq 'SteamShader') { @(Get-SteamLibraryRoots) } else { $null }
+        $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $(if ($Entry.RootPolicy) { $Entry.RootPolicy } else { 'Generic' }) -SteamRoots $liveSteamRoots
         if (-not $rootVerdict.Ok) {
             $result.Skipped++
             $result.Note = 'Cache location refused: ' + $rootVerdict.Reason
