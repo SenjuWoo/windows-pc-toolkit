@@ -4,15 +4,24 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.3.0 is published and delivered.** Release commit `ee6c1075f8adfdb6819e06874db0ebae092553f5`, annotated tag `v3.3.0` (tag object `eb211968d042ff105c588143cc0bbbb67ef3aa29`), published 2026-11-07. Payload re-downloaded, matched to that commit blob for blob and tested after extraction (716 assertions). Delivered copy `Windows-PC-Toolkit-3.3.0`, 77 files.
+**3.4.0 is published and delivered.** Release commit `f6be319782b7cbdeda7af7832e7bdb68b94f3b21`, annotated tag `v3.4.0` (tag object `347678a12e9f2c51f1632bf2636355aa57a6df95`), published 2026-11-08. Payload re-downloaded, matched to that commit blob for blob and tested after extraction (743 assertions). Delivered copy `Windows-PC-Toolkit-3.4.0`, 78 files.
 
-## Published release, verified 2026-11-07
+## Published release, verified 2026-11-08
 
-- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.3.0 - tag resolves to `ee6c1075f8adfdb6819e06874db0ebae092553f5`.
-- CI `42460183186`, CodeQL `42460183421`, all four checks success on that SHA. PRs #21 and #22 merged.
+- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.0 - tag resolves to `f6be319782b7cbdeda7af7832e7bdb68b94f3b21`.
+- CI `42511843237`, push `42511843268`; all four checks success on that SHA. PR #24 merged.
 - Alerts 0/0/0; Code Quality unavailable.
-- `Windows-PC-Toolkit-3.3.0.zip` - 400,129 bytes, SHA-256 `4ad2d1b6b144cf8b233218d8277f69a783525fed30444a46dfdd399bef4971ba`, 77 files, 0 raw mismatches. Provenance `1ab21424...`, SHA256SUMS `9af1b999...`, both match GitHub digests.
-- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.3.0`: smoke passes.
+- `Windows-PC-Toolkit-3.4.0.zip` - 407,753 bytes, SHA-256 `fe7f2164e010c793763cd1f6d7d3ce92c28a4b21b91f66403b7c04e566ca6ee3`, 78 files, 0 raw mismatches. Provenance `9c2d50bc0475bbdfeca3837fcad53765e7fcea7c6de94e4212965fcabfebaed1`; SHA256SUMS `2107c0f5815de68e473b2b051b74356269dc12ac74baa53ab5ef00fea3017a71`.
+- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.0`: smoke passes.
+
+## What 3.4.0 changed
+
+- One cleanup-root validator (drive roots, Windows/Program Files/ProgramData, profile/AppData/LocalLow roots, user libraries, game libraries, cloud-sync, ancestors of all of those); custom roots must also be named as a cache.
+- VRChat `cache_directory` honoured only when it passes that validator and re-read at execution; a change is refused with "rescan".
+- Every container target re-checked immediately before deletion; junctions never traversed.
+- Skyrim/modding cleanup re-derives processes, Documents root, cloud state and the approved target at execution; a forged row cannot authorize anything.
+- Coverage: MO2 logs, Vortex logs, DynDOLOD/TexGen/LODGen logs, Yarn, pnpm (report), GPU/DirectX shader caches (strict, opt-in). 20 categories: 13 deletable, 7 report-only.
+- Tests: 743 assertions (56 cache explorer, 28 Skyrim).
 
 ## What 3.3.0 changed
 
