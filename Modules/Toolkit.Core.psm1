@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 $script:SuiteRoot=Split-Path $PSScriptRoot -Parent
 $script:SuiteDataRoot=$DataRoot
-$script:SuiteVersion='3.1.1'
+$script:SuiteVersion='3.1.2'
 
 function Write-SuiteDiagnostic {
     param([string]$Operation,[string]$Message,[string]$Level='Debug',[string]$RunId)
@@ -93,7 +93,18 @@ function Save-SuiteJson {
     $null=$json | ConvertFrom-Json
     $temporary=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
     [IO.File]::WriteAllText($temporary,$json,(New-Object Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temporary,$Path,[NullString]::Value) }
+    if (Test-Path -LiteralPath $Path) {
+        # Replace is atomic, but Windows can refuse it for a moment while antivirus,
+        # search or a backup tool holds the report open. A completed run must not be
+        # reported as failed over a transient lock, so retry briefly and clean up.
+        for ($attempt=1; $attempt -le 5; $attempt++) {
+            try { [IO.File]::Replace($temporary,$Path,[NullString]::Value); break }
+            catch {
+                if ($attempt -eq 5) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue; throw }
+                Start-Sleep -Milliseconds (100*$attempt)
+            }
+        }
+    }
     else { [IO.File]::Move($temporary,$Path) }
 }
 function New-SuiteRun {

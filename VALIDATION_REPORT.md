@@ -1,5 +1,17 @@
 # Validation report
 
+## 3.1.2 verification — November 7, 2026
+
+Accessibility and release-tooling release. No optimization, repair, cleanup, debloat or DNS action changed.
+
+- The five dashboard grids, the adapter and provider selectors and the operation result log now carry accessible names. Eight assertions read them back from the loaded WPF controls instead of trusting the markup.
+- `Save-SuiteJson` retries an atomic replace that Windows briefly refuses while antivirus, search or a backup tool holds the report open, and removes its temp file when the replace still fails. Three assertions cover the permanently locked report and the write that follows.
+- `Validate_All.ps1` passes for 46 PowerShell files and now also fails when the module version, the dashboard label and the changelog's top entry disagree, or when one of the eight named controls lacks `AutomationProperties.Name`.
+- The native suite passes 640 assertions in nine suites: OneDrive 42, base 117, Suite 62, Cleaner 57, DNS/privacy 99, repair/gaming 49, launchers 125, final gaming 24, final Fixer 65.
+- `tests/tools/build_release.py` builds the published payload from the release commit with zero raw mismatches and re-verifies the downloaded asset against the same commit.
+
+Remaining limits are unchanged: no live OneDrive migration or uninstall, DNS change, Windows servicing, repair or performance proof; interactive UAC untested; a bounded metadata scan cannot prove all cloud files were downloaded.
+
 ## 3.1.1 verification — October 24, 2026
 
 Review of the 3.1.0 handoff reproduced its 614 native assertions and verified successful exact-release-SHA CI/Actions analysis, zero open alerts in the three available security categories, and the three downloaded asset hashes. Its claim of raw Git-blob equality was incorrect: 66 of 67 payload files have CRLF differences; all 67 match after newline normalization. No other payload content difference was found.

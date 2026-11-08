@@ -117,5 +117,27 @@ if(-not(Test-Path -LiteralPath $dhcpLauncher) -or (Get-Content -LiteralPath $dhc
 if(-not(Test-Path -LiteralPath $restoreLauncher) -or (Get-Content -LiteralPath $restoreLauncher -Raw) -notmatch '-Action\s+Restore'){$failed=$true;Write-Host '[FAIL] Snapshot restore launcher is missing or incorrect.' -ForegroundColor Red}
 if($dns -notmatch 'function\s+Reset-Dhcp[\s\S]{0,1600}Restore-Snapshot\s+-Path\s+\$snapshotPath'){$failed=$true;Write-Host '[FAIL] DHCP reset is not transactionally rolled back.' -ForegroundColor Red}
 
+Write-Host "`nChecking release version and accessible names..." -ForegroundColor Cyan
+# One version string, one changelog entry and one dashboard label: if they drift, the
+# build misreports itself, so every checkout must agree before a release is cut.
+$coreText=Get-Content -LiteralPath (Join-Path $root 'Modules\Toolkit.Core.psm1') -Raw
+$versionMatch=[regex]::Match($coreText,'\$script:SuiteVersion=''([0-9]+\.[0-9]+\.[0-9]+)''')
+$xamlText=Get-Content -LiteralPath (Join-Path $root 'Toolkit.xaml') -Raw
+if(-not $versionMatch.Success){$failed=$true;Write-Host '[FAIL] Suite version not found in Toolkit.Core.psm1.' -ForegroundColor Red}
+else{
+    $version=$versionMatch.Groups[1].Value
+    if($xamlText -notmatch [regex]::Escape("v$version")){$failed=$true;Write-Host "[FAIL] Toolkit.xaml does not show v$version." -ForegroundColor Red}
+    $firstHeading=[regex]::Match((Get-Content -LiteralPath (Join-Path $root 'CHANGELOG.md') -Raw),'(?m)^##\s+Toolkit\s+([0-9]+\.[0-9]+\.[0-9]+)')
+    if(-not $firstHeading.Success -or $firstHeading.Groups[1].Value -ne $version){$failed=$true;Write-Host "[FAIL] CHANGELOG top entry is not $version." -ForegroundColor Red}
+}
+# Screen readers need a name for controls whose value is not self-describing. Buttons
+# already expose their Content text, so only grids, combo boxes and the result log need one.
+[xml]$markup=Get-Content -LiteralPath (Join-Path $root 'Toolkit.xaml') -Raw
+foreach($control in @('OneDriveGrid','StartupGrid','AppsGrid','HistoryGrid','ServicesGrid','AdapterCombo','ProviderCombo','ResultText')){
+    $node=$markup.SelectSingleNode("//*[@*[local-name()='Name']='$control']")
+    $aria=if($node){$node.Attributes | Where-Object { $_.LocalName -eq 'AutomationProperties.Name' } | Select-Object -First 1}
+    if(-not $node -or -not $aria -or [string]::IsNullOrWhiteSpace($aria.Value)){$failed=$true;Write-Host "[FAIL] $control has no AutomationProperties.Name." -ForegroundColor Red}
+}
+
 if($failed){Write-Host "`nVALIDATION FAILED" -ForegroundColor Red;exit 1}
 Write-Host "`nALL VALIDATION CHECKS PASSED" -ForegroundColor Green
