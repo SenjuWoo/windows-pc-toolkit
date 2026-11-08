@@ -53,14 +53,22 @@ function Get-ModdingLogTargets {
     $L = $env:LOCALAPPDATA; $A = $env:APPDATA
     $out = @()
 
-    # MO2 keeps one logs folder per instance; global instances live under ModOrganizer\<instance>.
+    # MO2 keeps one logs folder per instance. A portable install puts it directly under the selected
+    # root; global instances live under ModOrganizer\<instance>. Either way the folder has to prove it
+    # is MO2 before its "logs" is accepted, so an arbitrary folder named logs is never authorized.
     $moRoot = if ($ModOrganizerRoot) { $ModOrganizerRoot } else { Join-Path $L 'ModOrganizer' }
     if (Test-Path -LiteralPath $moRoot -PathType Container) {
-        foreach ($instance in @(Get-ChildItem -LiteralPath $moRoot -Force -Directory -ErrorAction SilentlyContinue)) {
+        $instances = @()
+        if (Test-ModOrganizerRoot -Path $moRoot) { $instances += (Get-Item -LiteralPath $moRoot -Force) }
+        foreach ($child in @(Get-ChildItem -LiteralPath $moRoot -Force -Directory -ErrorAction SilentlyContinue)) {
+            if (Test-ModOrganizerRoot -Path $child.FullName) { $instances += $child }
+        }
+        foreach ($instance in $instances) {
             $logs = Join-Path $instance.FullName 'logs'
             if (-not (Test-Path -LiteralPath $logs -PathType Container)) { continue }
             $out += [pscustomobject]@{ Id = ('MO2_' + $instance.Name); Group = 'Modding'; Label = ("Mod Organizer 2 logs ({0})" -f $instance.Name)
                 Path = $logs; Pattern = '^(mo_interface|usvfs-.*)\.log\d*$'; PatternText = 'mo_interface.log, usvfs-*.log'
+                Process = @('ModOrganizer')
                 Source = 'MO2 support: open the log folder from the instance menu' }
         }
     }
@@ -69,7 +77,7 @@ function Get-ModdingLogTargets {
     $vortex = if ($VortexRoot) { $VortexRoot } else { Join-Path $A 'Vortex' }
     if (Test-Path -LiteralPath $vortex -PathType Container) {
         $out += [pscustomobject]@{ Id = 'Vortex'; Group = 'Modding'; Label = 'Vortex application logs'; Path = $vortex
-            Pattern = '^vortex\d*\.log$'; PatternText = 'vortex.log, vortex1.log'
+            Pattern = '^vortex\d*\.log$'; PatternText = 'vortex.log, vortex1.log'; Process = @('Vortex')
             Source = 'Vortex logs sit beside its state file in %APPDATA%\Vortex' }
     }
 
@@ -77,10 +85,21 @@ function Get-ModdingLogTargets {
     $dyndolod = if ($DynDolodRoot) { Join-Path $DynDolodRoot 'Logs' } else { $null }
     if ($dyndolod -and (Test-Path -LiteralPath $dyndolod -PathType Container)) {
         $out += [pscustomobject]@{ Id = 'DynDOLOD'; Group = 'Modding'; Label = 'DynDOLOD / TexGen / LODGen logs'; Path = $dyndolod
-            Pattern = '^(DynDOLOD|TexGen|LODGen)_.*_log\.txt$'; PatternText = 'DynDOLOD_SSE_log.txt, TexGen_*, LODGen_*'
+            Pattern = '^(DynDOLOD|TexGen|LODGen)_.*_log\.txt$'; PatternText = 'DynDOLOD_SSE_log.txt, TexGen_*, LODGen_*'; Process = @('DynDOLOD', 'TexGen', 'LODGen')
             Source = 'dyndolod.info: logs are written to DynDOLOD\Logs' }
     }
     return @($out)
+}
+
+function Test-ModOrganizerRoot {
+    # Identity, not a folder name: MO2 always ships its executable, and an instance keeps
+    # ModOrganizer.ini beside its logs. Anything else is just a folder that happens to be called logs.
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
+    foreach ($marker in @('ModOrganizer.exe', 'ModOrganizer.ini', 'nxmhandler.exe')) {
+        if (Test-Path -LiteralPath (Join-Path $Path $marker) -PathType Leaf) { return $true }
+    }
+    return $false
 }
 
 function Get-SkyrimToolTargets {
@@ -95,13 +114,21 @@ function Get-SkyrimToolTargets {
     return @($out)
 }
 
+function Get-SkyrimBlockingProcess {
+    # The process that owns a target, or $null when nothing is running. Skyrim rows are owned by the
+    # game plus the loader for that game version; modding rows are owned by the tool writing them.
+    param($Game, $Target)
+    if ($Target -and $Target.PSObject.Properties['Process'] -and $Target.Process) { return @($Target.Process) }
+    $names = @('SkyrimSE', 'SkyrimVR', 'skse64_loader', 'sksevr_loader')
+    if ($Game -and $Game.Id -eq 'SkyrimVR') { $names = @('SkyrimVR', 'sksevr_loader') }
+    elseif ($Game -and $Game.Id) { $names = @('SkyrimSE', 'skse64_loader') }
+    return @($names)
+}
+
 function Test-SkyrimClosed {
-    # Only the game and its loader write these logs. A running mod manager keeps its own state
-    # open, not the SKSE log files, so it does not block a per-file delete.
-    param($Game)
-    $names = @('SkyrimSE', 'SkyrimVR', 'skse64_loader')
-    if ($Game -and $Game.Process) { $names = @($Game.Process, 'skse64_loader') }
-    foreach ($name in $names) {
+    # A running game, loader or owning tool keeps its logs open, so nothing is deleted then.
+    param($Game, $Target)
+    foreach ($name in @(Get-SkyrimBlockingProcess -Game $Game -Target $Target)) {
         if (@(Get-Process -Name $name -ErrorAction SilentlyContinue).Count) { return $false }
     }
     return $true
@@ -127,6 +154,9 @@ function Remove-SkyrimLogFile {
     param([string]$Path, [string]$TargetId, [string]$DocumentsRoot, [string]$ModOrganizerRoot, [string]$VortexRoot, [string]$DynDolodRoot)
     $approved = Get-SkyrimApprovedTarget -Id $TargetId -DocumentsRoot $DocumentsRoot -ModOrganizerRoot $ModOrganizerRoot -VortexRoot $VortexRoot -DynDolodRoot $DynDolodRoot
     if (-not $approved -or $approved.CloudSynced) { return $false }
+    # The owning process is rechecked here, immediately before the delete, so a tool or game that
+    # started after the scan cannot have its open log removed underneath it.
+    if (-not (Test-SkyrimClosed -Game $approved.Game -Target $approved.Target)) { return $false }
     $root = $approved.Target.Path
     $pattern = $approved.Target.Pattern
     try {
@@ -157,7 +187,7 @@ function Get-SkyrimScan {
         }
     }
     foreach ($target in @(Get-ModdingLogTargets -ModOrganizerRoot $ModOrganizerRoot -VortexRoot $VortexRoot -DynDolodRoot $DynDolodRoot)) {
-        $rows += New-SkyrimRow -Target $target -Group 'Modding' -Game '' -CloudSynced $false -BlockedBy $false
+        $rows += New-SkyrimRow -Target $target -Group 'Modding' -Game '' -CloudSynced $false -BlockedBy (-not (Test-SkyrimClosed -Target $target))
     }
     return @($rows)
 }
@@ -200,6 +230,7 @@ function Invoke-SkyrimClean {
         $target = $approved.Target
         if ($target.Path -ne $row.Path) { Write-Status Warn ("{0}: folder changed since the scan; rescan." -f $row.Id); continue }
         if (-not (Test-CleanPathWithoutLinks $target.Path)) { Write-Status Warn ("{0}: linked path refused." -f $row.Id); continue }
+        if (-not (Test-SkyrimClosed -Target $target)) { Write-Status Warn ("{0}: close the application that writes these logs first." -f $row.Id); continue }
         $cutoff = if ($AnyAge) { $null } else { (Get-Date).AddDays(-7) }
         $files = @(Get-ChildItem -LiteralPath $target.Path -Force -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $target.Pattern })
         foreach ($file in $files) {

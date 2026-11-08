@@ -103,7 +103,12 @@ try {
     [void][IO.Directory]::CreateDirectory((Join-Path $vr 'Screenshots'))
     'cfg' | Set-Content -LiteralPath (Join-Path $vr 'config.json')
     'avatar' | Set-Content -LiteralPath (Join-Path $vr 'Cache-WindowsPlayer\avatar.bin')
-    $r = Invoke-CacheClean -Entry (New-Entry 'VRChatCache' @((Join-Path $vr 'Cache-WindowsPlayer')))
+    # The row carries the config it was scanned with; a clean may only be judged by that config.
+    $vrCfg = Join-Path $vr 'config.json'
+    @{ cache_directory = (Join-Path $vr 'Cache-WindowsPlayer') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $vrCfg -Encoding UTF8
+    $vrLive = New-Entry 'VRChatCache' @((Join-Path $vr 'Cache-WindowsPlayer'))
+    $vrLive | Add-Member -NotePropertyName ConfigPath -NotePropertyValue $vrCfg -Force
+    $r = Invoke-CacheClean -Entry $vrLive
     Check ($r.Removed -eq 1 -and (Test-Path -LiteralPath (Join-Path $vr 'config.json')) -and (Test-Path -LiteralPath (Join-Path $vr 'Screenshots'))) 'A VRChat cache clean keeps config and screenshots'
 
     # 10. Steam shadercache is separate from installed games.
@@ -287,6 +292,86 @@ try {
     Check ($r.Status -eq 'Skipped' -and $r.Removed -eq 0) 'A profile root configured as a cache is refused at execution'
     $r = Invoke-CacheClean -Entry (New-Entry 'DriveRoot' @('C:\'))
     Check ($r.Status -eq 'Skipped' -and $r.Removed -eq 0) 'A drive root is never cleaned'
+
+    # 27. Steam's own shadercache under Program Files is cleanable, everything else there is not.
+    $lib = Join-Path $fixture 'steamlibrary'
+    $shader = Join-Path $lib 'steamapps\shadercache'
+    $common = Join-Path $lib 'steamapps\common\SomeGame'
+    [void][IO.Directory]::CreateDirectory((Join-Path $shader '111'))
+    [void][IO.Directory]::CreateDirectory($common)
+    'shader' | Set-Content -LiteralPath (Join-Path $shader '111\shaders.bin')
+    'game' | Set-Content -LiteralPath (Join-Path $common 'game.exe')
+
+    Check ((Test-CleanupRoot -Path $shader -AllowAnyName -Policy SteamShader -SteamRoots @($lib)).Ok) 'A verified Steam shadercache is accepted under the Steam policy'
+    # With a real Steam install under Program Files, the generic policy must still refuse it.
+    $pfShader = Join-Path $env:ProgramFiles 'Steam\steamapps\shadercache'
+    if (Test-Path -LiteralPath $pfShader -PathType Container) {
+        Check (-not (Test-CleanupRoot -Path $pfShader -AllowAnyName).Ok) 'The real Program Files shadercache is refused by the generic policy'
+        Check ((Test-CleanupRoot -Path $pfShader -AllowAnyName -Policy SteamShader).Ok) 'The same folder passes the Steam policy'
+    }
+    Check (-not (Test-CleanupRoot -Path $common -AllowAnyName -Policy SteamShader -SteamRoots @($lib)).Ok) 'steamapps\common is not a shader cache'
+    Check (-not (Test-CleanupRoot -Path (Join-Path $lib 'steamapps') -AllowAnyName -Policy SteamShader -SteamRoots @($lib)).Ok) 'steamapps itself is not a shader cache'
+    $forgedPf = Join-Path $env:ProgramFiles 'Cache'
+    Check (-not (Test-CleanupRoot -Path $forgedPf -AllowAnyName -Policy SteamShader -SteamRoots @($lib)).Ok) 'An arbitrary Program Files folder is refused even under the Steam policy'
+    Check (-not (Test-CleanupRoot -Path $shader -AllowAnyName -Policy SteamShader -SteamRoots @((Join-Path $fixture 'otherlib'))).Ok) 'A shadercache outside the reported libraries is refused'
+
+    $steamEntry = New-Entry 'SteamShaderCache' @($shader)
+    $steamEntry | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $steamEntry | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($lib) -Force
+    $r = Invoke-CacheClean -Entry $steamEntry
+    Check ($r.Removed -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $shader '111\shaders.bin'))) 'The Steam policy actually deletes the shader cache'
+    Check (Test-Path -LiteralPath (Join-Path $common 'game.exe')) 'A sibling game installation survives the shader clean'
+
+    # A junction inside the shader cache is not traversed.
+    $jc = Join-Path $shader 'j'
+    [void][IO.Directory]::CreateDirectory($jc)
+    $outside = Join-Path $fixture 'outside-store'
+    [void][IO.Directory]::CreateDirectory($outside)
+    'keep' | Set-Content -LiteralPath (Join-Path $outside 'keep.bin')
+    $linked = $false
+    try { cmd /c mklink /J "$jc" "$outside" | Out-Null; $linked = $true } catch { $linked = $false }
+    if ($linked) {
+        'x' | Set-Content -LiteralPath (Join-Path $shader 'real.bin')
+        $r = Invoke-CacheClean -Entry $steamEntry
+        Check (Test-Path -LiteralPath (Join-Path $outside 'keep.bin')) 'A junction inside the shader cache is not followed'
+        if (Test-Path -LiteralPath $jc) { [IO.Directory]::Delete($jc) }
+    }
+
+    # 28. VRChat freshness fails closed when the effective configuration cannot be proven.
+    $cfgPath = Join-Path $fixture 'vrchat-config.json'
+    $customA = Join-Path $fixture 'vr\CacheA'
+    $customB = Join-Path $fixture 'vr\CacheB'
+    $vrDefault = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\Cache-WindowsPlayer'))
+    $vrEntry = New-Entry 'VRChatCache' @($customA)
+    $vrDefaultEntry = New-Entry 'VRChatCache' @($vrDefault)
+
+    @{ cache_directory = $customA } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    Check ($null -eq (Test-CacheEntryFresh -Entry $vrEntry -ConfigPath $cfgPath)) 'An unchanged custom location is fresh'
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrDefaultEntry -ConfigPath $cfgPath)) 'A default row is stale once a custom location is configured'
+
+    @{ cache_directory = $customB } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrEntry -ConfigPath $cfgPath)) 'Custom to custom change is refused'
+
+    @{ cache_directory = $vrDefault } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrEntry -ConfigPath $cfgPath)) 'Custom to default is refused for the custom row'
+    Check ($null -eq (Test-CacheEntryFresh -Entry $vrDefaultEntry -ConfigPath $cfgPath)) 'Custom to default is fresh for the default row'
+
+    @{ other = 'x' } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    Check ($null -eq (Test-CacheEntryFresh -Entry $vrDefaultEntry -ConfigPath $cfgPath)) 'A config without a custom path still allows the documented default'
+
+    'not json at all' | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrEntry -ConfigPath $cfgPath)) 'Malformed config refuses a custom row'
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrDefaultEntry -ConfigPath $cfgPath)) 'Malformed config refuses even the default row'
+
+    @{ cache_directory = 'C:\' } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrEntry -ConfigPath $cfgPath)) 'A drive-root cache value is never treated as fresh'
+
+    Remove-Item -LiteralPath $cfgPath -Force
+    Check ($null -ne (Test-CacheEntryFresh -Entry $vrEntry -ConfigPath $cfgPath)) 'A removed config refuses the previously custom row'
+    Check ($null -eq (Test-CacheEntryFresh -Entry $vrDefaultEntry -ConfigPath $cfgPath)) 'A removed config still allows the default row'
+
+    $vrState = Get-VRChatCacheState -ConfigPath $cfgPath
+    Check ($vrState.State -eq 'absent') 'An absent config is reported as absent, not as a verified default'
 
     Write-Host "PASS: $checks cache explorer checks. Fixtures under TEMP only." -ForegroundColor Green
 } finally {

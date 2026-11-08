@@ -1,5 +1,17 @@
 # Validation report
 
+## 3.4.1 verification — November 8, 2026
+
+Steam shader-cache policy, VRChat fail-closed configuration, portable MO2 identity and modding process gates. No live cache, game, modding log or AI home was deleted.
+
+- **Steam (9 checks)**: a fixture library's `steamapps\shadercache` is accepted under the Steam policy and actually cleaned; `steamapps\common`, `steamapps` itself, a forged `Program Files\Cache`, a shadercache outside the reported libraries and a junction inside the cache are all refused or not traversed. On a real install the same folder is refused by the generic policy and accepted by the Steam policy. Scan state reports the process gate (`steam is running`) rather than a bogus refusal, and measured 20,148,363 eligible bytes on this machine.
+- **VRChat (11 checks)**: unchanged custom location is fresh; custom-to-custom, custom-to-default, malformed JSON, a drive-root value and a removed config all refuse; a config without a custom path still allows the documented default; an absent config reports `absent`, not a verified default; the clean path requires the row's own config.
+- **Skyrim/modding (35 checks, was 28)**: portable MO2 root with `ModOrganizer.exe` exposes `logs`; the same folder without an identity marker is not authorized even with `mo_interface.log` present; a running application blocks its own diagnostics; Skyrim VR checks `sksevr_loader` and Skyrim SE does not.
+- Suite: **770 assertions**, eleven suites, exit 0 (45 OneDrive, 117 base, 62 suite, 57 cleaner, 76 cache explorer, 35 Skyrim, 104 DNS/privacy, 49 repair/gaming, 125 launchers, 35 final gaming, 65 Fixer). `Validate_All.ps1`: all checks passed.
+- Catalog: 22 categories — 13 deletable, 9 report-only.
+
+Remaining limits: the Steam policy trusts the library list Steam itself reports (registry plus `libraryfolders.vdf`), so a library removed from that file is out of scope until it is back. VRChat config handling covers the documented `cache_directory` only. MO2 detection needs one of `ModOrganizer.exe`, `ModOrganizer.ini` or `nxmhandler.exe`; a portable instance that renamed them will not appear. Codex and Claude rows stay report-only by design. Sizes are estimates; a partially failed removal leaves files; there is no undo; recompilation and rebuild costs were not measured.
+
 ## 3.4.0 verification — November 8, 2026
 
 Deletion-safety hardening and modding coverage. No live cache, game or modding log was deleted.

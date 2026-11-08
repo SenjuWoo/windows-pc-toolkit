@@ -1,5 +1,14 @@
 # Changelog
 
+## Toolkit 3.4.1 (2026-11-08)
+
+- Fixed the Steam shader-cache row: it was discovered under `Program Files (x86)` and then refused by the Program Files guard, so it could never be cleaned. A Steam policy now accepts exactly the shadercache folders Steam reports live; the guard is unchanged for every other path, and `steamapps`, `common`, `compatdata`, installers and manifests stay out of reach.
+- Scan and deletion share that policy, so no category is advertised as cleanable when the delete would refuse it.
+- VRChat cache freshness now fails closed: one resolver reports `absent`, `default`, `custom` or `invalid`, and a moved, removed, unreadable or path-less config refuses the row with "rescan" instead of being treated as agreement. The documented default still works when no custom path was set.
+- Skyrim/modding: portable MO2 instances are detected (`logs` under the selected root) and a root must prove it is MO2 through its own files. MO2, Vortex and DynDOLOD/TexGen/LODGen logs are gated by their owning process at scan, at clean and immediately before each deletion. Skyrim VR checks `sksevr_loader`.
+- Catalog is 22 categories (13 deletable, 9 report-only). Codex catalog cache and Claude shell snapshots are measured but report-only: both live in homes protected wholesale, and the guard was not weakened for them.
+- `pc-cleaner/README.md` headings now match the shipped versions, with a table defining SAFE, CAREFUL, STRICT and REPORT.
+
 ## Toolkit 3.4.0 (2026-11-08)
 
 - One cleanup-root validator now decides what may be deleted as a cache: drive roots, Windows/Program Files/ProgramData, profile, AppData and LocalLow roots, user libraries, game libraries and cloud-sync folders are refused, as is any path that contains one of them. A custom root must also be named as a cache.

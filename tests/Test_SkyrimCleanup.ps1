@@ -127,6 +127,8 @@ try {
     $mo = Join-Path $fixture 'mo'
     $moLogs = Join-Path $mo 'Instance1\logs'
     [void][IO.Directory]::CreateDirectory($moLogs)
+    # A real instance keeps ModOrganizer.ini beside its logs; that file is the identity check.
+    'cfg' | Set-Content -LiteralPath (Join-Path $mo 'Instance1\ModOrganizer.ini')
     [void][IO.Directory]::CreateDirectory((Join-Path $mo 'Instance1\mods\SomeMod'))
     'm' | Set-Content -LiteralPath (Join-Path $moLogs 'mo_interface.log')
     'u' | Set-Content -LiteralPath (Join-Path $moLogs 'usvfs-2026-01-01.log')
@@ -160,6 +162,32 @@ try {
     Check (Test-Path -LiteralPath (Join-Path $mo 'Instance1\mods\SomeMod\important.esp')) 'MO2 mod files survive'
     Check (Test-Path -LiteralPath (Join-Path $vortex 'state.v2')) 'Vortex state survives'
     Check (Test-Path -LiteralPath (Join-Path $dd 'Logs\notes.txt')) 'An unrelated file in the log folder survives'
+
+    # Portable MO2: logs under the selected root, but only when the root proves it is MO2.
+    $portable = Join-Path $fixture 'MoPortable'
+    [void][IO.Directory]::CreateDirectory((Join-Path $portable 'logs'))
+    'a' | Set-Content -LiteralPath (Join-Path $portable 'logs\mo_interface.log')
+    $noIdentity = @(Get-ModdingLogTargets -ModOrganizerRoot $portable -VortexRoot $noTools -DynDolodRoot $noTools)
+    Check ($noIdentity.Count -eq 0) 'A folder named logs without MO2 identity is not authorized'
+    'exe' | Set-Content -LiteralPath (Join-Path $portable 'ModOrganizer.exe')
+    $withIdentity = @(Get-ModdingLogTargets -ModOrganizerRoot $portable -VortexRoot $noTools -DynDolodRoot $noTools)
+    Check ($withIdentity.Count -eq 1 -and $withIdentity[0].Id -eq 'MO2_MoPortable') 'A portable MO2 root exposes its logs folder'
+
+    $fakeLogs = Join-Path $fixture 'just-a-folder\logs'
+    [void][IO.Directory]::CreateDirectory($fakeLogs)
+    'x' | Set-Content -LiteralPath (Join-Path $fakeLogs 'mo_interface.log')
+    Check (@(Get-ModdingLogTargets -ModOrganizerRoot (Join-Path $fixture 'just-a-folder') -VortexRoot $noTools -DynDolodRoot $noTools).Count -eq 0) 'An arbitrary logs folder is refused even with a matching filename'
+
+    # A running owning application blocks its own log folder.
+    $liveTarget = [pscustomobject]@{ Id = 'Tool'; Process = @((Get-Process -Id $PID).ProcessName) }
+    Check (-not (Test-SkyrimClosed -Target $liveTarget)) 'A running application blocks its diagnostics'
+    Check (Test-SkyrimClosed -Target ([pscustomobject]@{ Id = 'Tool'; Process = @('definitely-not-running-xyz') })) 'A closed application does not block its diagnostics'
+
+    # Skyrim VR uses its own loader name.
+    $vrNames = @(Get-SkyrimBlockingProcess -Game ([pscustomobject]@{ Id = 'SkyrimVR' }))
+    Check ($vrNames -contains 'sksevr_loader' -and $vrNames -contains 'SkyrimVR') 'Skyrim VR checks sksevr_loader and the VR executable'
+    $seNames = @(Get-SkyrimBlockingProcess -Game ([pscustomobject]@{ Id = 'SkyrimSE' }))
+    Check ($seNames -contains 'skse64_loader' -and $seNames -notcontains 'sksevr_loader') 'Skyrim SE checks its own loader only'
 
     Write-Host "PASS: $checks Skyrim cleanup checks. Fixtures under TEMP only." -ForegroundColor Green
 } finally {
