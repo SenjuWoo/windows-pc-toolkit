@@ -1,4 +1,4 @@
-# PC Cleaner 1.4.1
+# PC Cleaner 1.4.2
 
 Scan-first cleanup and targeted registry repair. Use the [dashboard](../README.md) or `Run_As_Admin.bat` for the detailed console. Extract the complete toolkit; registry care uses shared root `Modules`.
 
@@ -14,7 +14,7 @@ Protected names include cookies, logins, history, bookmarks, sessions, app stora
 
 All report-only categories appear in the scan. Windows.old, patcher backups, AI stores, Recall data and Windows Update downloads cannot be deleted by any cleaner profile or an older category descriptor. Delivery Optimization reports the measured before/after reduction rather than claiming all cached files were removed; command failures remain failures in the run report.
 
-## Cache Explorer (v1.4.1)
+## Cache Explorer (v1.4.2)
 
 Menu `[8]` in the console opens a read-only scan of caches that are usually safe to drop, grouped by **AI**, **Gaming** and **Dev**. Nothing runs because a tool is installed: a category appears only when its folder exists, and deletion always asks first.
 

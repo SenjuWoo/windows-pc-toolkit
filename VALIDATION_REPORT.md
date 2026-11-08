@@ -1,5 +1,17 @@
 # Validation report
 
+## 3.4.2 verification — November 8, 2026
+
+Steam multi-library shader cache. No live Steam library, cache or game was touched.
+
+- **Reproduced first**: a fixture with one populated and one absent shader cache returned `Cache location refused: Not an existing folder` for the whole category while the scan measured 3 eligible bytes — the row advertised numbers it could never act on.
+- After the fix the same fixture reports a clean state and removes exactly the populated cache, leaving a game in the library that has no shader cache untouched.
+- **Covered by fixtures (9 new checks, 85 total)**: one populated plus one empty library; two populated libraries; a library dropped from the live mapping after the scan (its file survives); a row whose only folder is absent (reported, not cleanable); a folder merely named like a shader cache; a junction never accepted. Directory junctions are created with `mklink /J` and skipped when the host refuses.
+- Suite: **779 assertions**, eleven suites, exit 0. `Validate_All.ps1`: all checks passed.
+- Catalog: 22 categories — 13 deletable, 9 report-only.
+
+Remaining limits: Steam's registry plus `libraryfolders.vdf` is the authority for which libraries exist, so a library Steam does not report cannot be cleaned. Fixtures only; shader recompilation cost was not measured.
+
 ## 3.4.1 verification — November 8, 2026
 
 Steam shader-cache policy, VRChat fail-closed configuration, portable MO2 identity and modding process gates. No live cache, game, modding log or AI home was deleted.
