@@ -508,8 +508,7 @@ function Invoke-LegacyNetworkCleanup {
             foreach ($name in @('TcpAckFrequency','TCPNoDelay','TcpDelAckTicks')) { Remove-RegistryValueIfPresent $key.PSPath $name }
         }
     }
-    Enable-GamingSupportedOffloads
-    Write-ToolStatus OK 'Legacy Nagle/QoS/MMCSS overrides removed; supported RSS/RSC offloads enabled where available.'
+    Write-ToolStatus OK 'Legacy Nagle/QoS/MMCSS overrides removed. Network offloads, DNS and DoH entries were preserved.'
     Write-ToolStatus INFO 'TCP autotuning was preserved rather than guessed.'
     Write-ToolStatus INFO 'Adapter DNS addresses and DoH entries were not touched.'
 }
@@ -690,31 +689,30 @@ function Invoke-LegacyOptimizerRepair {
         Remove-RegistryValueIfPresent $target.Path $target.Name
     }
     $games='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'
-    Set-RegistryValueExact $games 'GPU Priority' 8 DWord
-    Set-RegistryValueExact $games 'Priority' 2 DWord
-    Set-RegistryValueExact $games 'Scheduling Category' 'Medium' String
-    Set-RegistryValueExact $games 'SFIO Priority' 'Normal' String
-    Set-RegistryValueExact $games 'Background Only' 'True' String
-    Remove-RegistryValueIfPresent $games 'Clock Rate'
-    Enable-GamingSupportedOffloads
-    if(Get-Service -Name SysMain -ErrorAction SilentlyContinue){Set-Service -Name SysMain -StartupType Automatic -ErrorAction Stop;Start-Service -Name SysMain -ErrorAction Stop}
-    Remove-GamingBcdOverrides
-    Write-ToolStatus OK 'Legacy optimizer overrides removed. DNS, GPU drivers, active power plan, and TCP autotuning were preserved.'
-    Write-ToolStatus INFO 'Reboot recommended.'
-}
-
-function Enable-GamingSupportedOffloads {
-    foreach ($adapter in Get-NetworkAdapterStates) {
-        if ($adapter.RssAvailable) {
-            Enable-NetAdapterRss -Name $adapter.Name -Confirm:$false -ErrorAction Stop
-            if (-not (Get-NetAdapterRss -Name $adapter.Name -ErrorAction Stop).Enabled) { throw "RSS enable verification failed: $($adapter.Name)" }
-        }
-        if ($adapter.RscAvailable) {
-            Enable-NetAdapterRsc -Name $adapter.Name -Confirm:$false -ErrorAction Stop
-            $rsc=Get-NetAdapterRsc -Name $adapter.Name -ErrorAction Stop
-            if (-not $rsc.IPv4Enabled -or -not $rsc.IPv6Enabled) { throw "RSC enable verification failed: $($adapter.Name)" }
-        }
+    # Microsoft's documented Games task defaults. The snapshot above already holds whatever
+    # was there, so undo restores a custom configuration; a value already at the default is
+    # left untouched instead of being rewritten.
+    $defaults=@(
+        @{Name='GPU Priority';Value=8;Kind='DWord'},
+        @{Name='Priority';Value=2;Kind='DWord'},
+        @{Name='Scheduling Category';Value='Medium';Kind='String'},
+        @{Name='SFIO Priority';Value='Normal';Kind='String'},
+        @{Name='Background Only';Value='True';Kind='String'})
+    $reset=0
+    foreach($default in $defaults){
+        $current=Get-RegistryValueState -Path $games -Name $default.Name
+        if($current.Exists -and ([string]$current.Value -eq [string]$default.Value)){continue}
+        Set-RegistryValueExact $games $default.Name $default.Value $default.Kind
+        $reset++
     }
+    Remove-RegistryValueIfPresent $games 'Clock Rate'
+    Remove-GamingBcdOverrides
+    # SysMain startup and network offloads are configuration, not leftovers of a v3.x tweak,
+    # and the value before the tweak was never recorded. Report them instead of forcing a guess.
+    $sysMain=Get-Service -Name SysMain -ErrorAction SilentlyContinue
+    if($sysMain){Write-ToolStatus INFO ("SysMain is {0} / {1}; left unchanged." -f $sysMain.Status,$sysMain.StartType)}
+    Write-ToolStatus OK ("Legacy optimizer overrides removed; {0} MMCSS value(s) reset to the documented default. DNS, GPU drivers, power plan, network offloads and TCP autotuning were preserved." -f $reset)
+    Write-ToolStatus INFO 'Reboot recommended.'
 }
 
 function Remove-GamingBcdOverrides {

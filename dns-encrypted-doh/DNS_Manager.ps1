@@ -156,7 +156,27 @@ function Test-WindowsDohSupport {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) { throw "The supported Windows DoH interface is unavailable: $command. No DNS settings were changed." }
     }
 }
+function Enter-DnsOperation {
+    # The dashboard's shared mutex. Re-entering on the same thread (the worker calls these
+    # functions while already holding it) succeeds; another console or process is refused
+    # instead of racing a live DNS change and its snapshot.
+    $mutex=New-Object Threading.Mutex($false,'Global\WindowsPCToolkit.SafeOperation')
+    try { $entered=$mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $entered=$true }
+    if (-not $entered) { $mutex.Dispose(); throw 'Another toolkit operation is running. Wait for it to finish.' }
+    return $mutex
+}
 function Set-Provider {
+    param([string]$Key)
+    $lock=Enter-DnsOperation
+    try {
+        $script:DnsSnapshotForUndo=$null
+        Set-ProviderCore -Key $Key | Out-Null
+        $path=$script:DnsSnapshotForUndo; $script:DnsSnapshotForUndo=$null
+        if (-not $path) { throw 'DNS apply finished without recording its snapshot.' }
+        return $path
+    } finally { $lock.ReleaseMutex(); $lock.Dispose() }
+}
+function Set-ProviderCore {
     param([string]$Key)
     if ($Key -like 'Mullvad*') { throw 'Mullvad public DNS retires November 2, 2026. New applies are removed; choose Quad9 or AdGuard. Previous backups remain restorable.' }
     Assert-Admin;Test-WindowsDohSupport;Initialize-State
@@ -183,6 +203,7 @@ function Set-Provider {
         try{Restore-Snapshot -Path $snapshotPath}catch{Write-Status FAIL ("Automatic rollback also failed: {0}" -f $_.Exception.Message)}
         throw $applyError
     }
+    $script:DnsSnapshotForUndo=$snapshotPath
 }
 function Test-Configuration {
     param([string]$ProviderKey)
@@ -283,6 +304,11 @@ function Assert-DnsSnapshot {
 }
 function Restore-Snapshot {
     param([string]$Path)
+    $lock=Enter-DnsOperation
+    try { Restore-SnapshotCore -Path $Path } finally { $lock.ReleaseMutex(); $lock.Dispose() }
+}
+function Restore-SnapshotCore {
+    param([string]$Path)
     Assert-Admin;Initialize-State
     $path=if($Path){$Path}else{Get-LatestSnapshot};if(-not $path -or -not(Test-Path -LiteralPath $path)){throw 'No DNS snapshot exists.'}
     Assert-DnsStatePath $path -Snapshot
@@ -365,6 +391,17 @@ function Restore-Snapshot {
     Write-Status OK ("DNS state restored and verified from {0}" -f $path)
 }
 function Reset-Dhcp {
+    param()
+    $lock=Enter-DnsOperation
+    try {
+        $script:DnsSnapshotForUndo=$null
+        Reset-DhcpCore | Out-Null
+        $path=$script:DnsSnapshotForUndo; $script:DnsSnapshotForUndo=$null
+        if (-not $path) { throw 'DNS reset finished without recording its snapshot.' }
+        return $path
+    } finally { $lock.ReleaseMutex(); $lock.Dispose() }
+}
+function Reset-DhcpCore {
     Assert-Admin;Initialize-State
     $snapshotPath=New-DnsSnapshot
     try{
@@ -384,6 +421,7 @@ function Reset-Dhcp {
         try{Restore-Snapshot -Path $snapshotPath}catch{Write-Status FAIL ("Automatic rollback also failed: {0}" -f $_.Exception.Message)}
         throw $resetError
     }
+    $script:DnsSnapshotForUndo=$snapshotPath
 }
 function Show-Menu {
     Clear-Host

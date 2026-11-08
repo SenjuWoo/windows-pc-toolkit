@@ -74,6 +74,33 @@ try {
         Check $blocked 'Linked gaming state root is rejected'
         Check (@(Get-ChildItem -LiteralPath $outside -Force).Count -eq 0) 'Linked state target remains untouched'
     } finally {[IO.Directory]::Delete($linked)}
+    # v3.x repair must remove leftover overrides, not impose configuration. SysMain and
+    # adapter offloads are the user's choice; MMCSS defaults are written only when they differ.
+    & $module {
+        $script:RepairCalls=@()
+        function script:Get-GamingRegistryTargets { @() }
+        function script:New-GamingSnapshot { param($Reason,$RegistryTargets,[switch]$IncludeServices,[switch]$IncludeNetwork,[switch]$IncludeBcd) $script:RepairCalls+='snapshot' }
+        function script:Remove-RegistryValueIfPresent { param($Path,$Name) $script:RepairCalls+=('remove:'+$Name) }
+        function script:Get-RegistryValueState { param($Path,$Name)
+            if($Name -eq 'Background Only'){return [pscustomobject]@{Path=$Path;Name=$Name;Exists=$true;Kind='String';Value='True'}}
+            if($Name -eq 'GPU Priority'){return [pscustomobject]@{Path=$Path;Name=$Name;Exists=$true;Kind='DWord';Value=18}}
+            return [pscustomobject]@{Path=$Path;Name=$Name;Exists=$false;Kind='DWord';Value=$null}
+        }
+        function script:Set-RegistryValueExact { param($Path,$Name,$Value,$Kind) $script:RepairCalls+=('set:'+$Name+'='+$Value) }
+        function script:Remove-GamingBcdOverrides { $script:RepairCalls+='bcd' }
+        function script:Get-Service { param($Name) [pscustomobject]@{Status='Running';StartType='Disabled'} }
+        function script:Set-Service { param($Name,$StartupType) throw 'SysMain startup must not be forced' }
+        function script:Start-Service { param($Name) throw 'SysMain must not be started' }
+        function script:Enable-NetAdapterRss { param($Name) throw 'RSS must not be enabled by a cleanup' }
+        function script:Enable-NetAdapterRsc { param($Name) throw 'RSC must not be enabled by a cleanup' }
+    }
+    Invoke-LegacyOptimizerRepair
+    $repair=& $module {$script:RepairCalls}
+    Check ($repair -contains 'snapshot') 'Legacy repair snapshots before writing'
+    Check ($repair -contains 'set:GPU Priority=8') 'A custom MMCSS value is reset to the documented default'
+    Check (-not ($repair -contains 'set:Background Only=True')) 'An MMCSS value already at the default is not rewritten'
+    Check (@($repair | Where-Object { $_ -like 'set:*' -and $_ -notmatch '^set:(GPU Priority=8|Priority=2|Scheduling Category=Medium|SFIO Priority=Normal)$' }).Count -eq 0) 'Only documented MMCSS defaults are written'
+    Check (-not [bool](& $module { Get-Command Enable-GamingSupportedOffloads -ErrorAction SilentlyContinue })) 'Legacy cleanup no longer applies adapter offloads'
     Write-Host "PASS: $checks final gaming audit checks. Only disposable HKCU/files and intercepted adapters were used." -ForegroundColor Green
 } finally {
     Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue

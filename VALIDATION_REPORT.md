@@ -1,5 +1,17 @@
 # Validation report
 
+## 3.1.3 verification — November 7, 2026
+
+Safety hardening for the legacy optimizer repair, the OneDrive folder gate and encrypted DNS.
+
+- Legacy repair: no longer calls `Set-Service`/`Start-Service` for SysMain or enables RSS/RSC on adapters; the function that forced offloads was removed. MMCSS Games values are written only when they differ from the documented defaults. Five assertions run the real repair against intercepted registry/service/adapter functions and prove a matching value is not rewritten, only documented defaults are written, a snapshot precedes the writes, and no service or adapter mutation happens.
+- OneDrive gate: a missing Explorer `Shell Folders` value is now unverified instead of assumed local. Three assertions reproduce the missing cache entry and prove lock, uninstall and restore stay blocked while the row explains how the cache is rebuilt.
+- DNS: `Set-Provider` and `Reset-Dhcp` return the exact snapshot they created, and the worker records that path instead of the newest snapshot on disk. Both entry points take the shared operation mutex. Five assertions cover the returned path and a real second-thread lock refusal, followed by a successful acquisition after release.
+- `Validate_All.ps1` passes for 46 PowerShell files. The native suite passes 653 assertions in nine suites: OneDrive 45, base 117, Suite 62, Cleaner 57, DNS/privacy 104, repair/gaming 49, launchers 125, final gaming 29, final Fixer 65. Smoke test: 66 controls, 20 optimization choices.
+- No live SysMain, adapter, DNS, OneDrive, registry or file change was made while validating.
+
+Remaining limits are unchanged: no live OneDrive migration or uninstall, DNS change, Windows servicing, repair or performance proof; interactive UAC untested; a bounded metadata scan cannot prove all cloud files were downloaded. Fixture checks cannot prove what a specific third-party driver does with an offload setting; the toolkit now leaves that setting alone rather than guessing.
+
 ## 3.1.2 verification — November 7, 2026
 
 Accessibility and release-tooling release. No optimization, repair, cleanup, debloat or DNS action changed.

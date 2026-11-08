@@ -43,15 +43,18 @@ try {
                 $mutex=Enter-SuiteOperation
                 try {
                     $report=New-SuiteRun 'DNS'
+                    $snapshot=$null
                     switch ($request.DnsAction) {
                         'Restore' { Restore-Snapshot }
-                        'DHCP' { Reset-Dhcp }
+                        'DHCP' { $snapshot=Reset-Dhcp }
                         default {
                             if (-not $Providers.Contains($request.DnsAction)) { throw 'Unknown DNS provider.' }
-                            Set-Provider $request.DnsAction
+                            $snapshot=Set-Provider $request.DnsAction
                         }
                     }
-                    if ($request.DnsAction -ne 'Restore') { $report | Add-Member -NotePropertyName DnsBackup -NotePropertyValue (Get-LatestSnapshot) }
+                    # Record the snapshot this operation created, not whatever a parallel
+                    # process wrote most recently: undo must restore the state before this change.
+                    if ($snapshot) { $report | Add-Member -NotePropertyName DnsBackup -NotePropertyValue $snapshot }
                     $report.Status='Completed'; $report.Message='DNS action completed and checked.'
                     Add-SuiteStep $report 'DNS' 'Applied' $report.Message
                     Save-SuiteJson $report.Path $report
