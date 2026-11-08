@@ -1,4 +1,4 @@
-# PC Cleaner 1.1.2
+# PC Cleaner 1.2.0
 
 Scan-first cleanup and targeted registry repair. Use the [dashboard](../README.md) or `Run_As_Admin.bat` for the detailed console. Extract the complete toolkit; registry care uses shared root `Modules`.
 
@@ -8,11 +8,43 @@ Elevation preserves the originating Windows account identity. If Windows asks fo
 | --- | --- |
 | Balanced | Aged user/Windows Temp, thumbnail/icon caches, error-report queues, WinINet/browser page caches, editor caches and official Delivery Optimization cleanup. |
 | Strict, selected and confirmed | Shaders, crash dumps, servicing logs, Prefetch and extra browser caches. Recompiling shaders can cause stutter after cleanup. |
-| Report only | AI model/app stores, Recall data, patcher backups/leftovers, Windows Update download folders and Windows.old. The category executor cannot delete them. Use Windows storage/servicing tools for update/rollback data. |
+| Report only | AI model/app stores, AI assistant homes (Codex, Claude, Hermes), Unity project libraries, Recall data, patcher backups/leftovers, Windows Update download folders and Windows.old. The category executor cannot delete them. Use Windows storage/servicing tools for update/rollback data. |
 
 Protected names include cookies, logins, history, bookmarks, sessions, app storage, editor history/extensions, personal folders and common local model stores. Cleanup checks links in every parent directory as well as the target, so a browser profile or cache below a junction is kept. Temp scan totals include only files older than seven days for both writing and access; cleanup checks the age again before deletion. Deleted files are not undoable.
 
 All report-only categories appear in the scan. Windows.old, patcher backups, AI stores, Recall data and Windows Update downloads cannot be deleted by any cleaner profile or an older category descriptor. Delivery Optimization reports the measured before/after reduction rather than claiming all cached files were removed; command failures remain failures in the run report.
+
+## Cache Explorer (v1.2.0)
+
+Menu `[8]` in the console opens a read-only scan of caches that are usually safe to drop, grouped by **AI**, **Gaming** and **Dev**. Nothing runs because a tool is installed: a category appears only when its folder exists, and deletion always asks first.
+
+| Section | Category | Default | What it touches |
+| --- | --- | --- | --- |
+| AI | Antigravity editor caches | SAFE | `Cache`, `Code Cache`, `CachedData`, `GPUCache` under `%APPDATA%\Antigravity`, and only when the sibling `User` folder proves the layout |
+| AI | Codex / Claude / Hermes home | REPORT | Measured, never deleted. Sessions, SQLite state, `.claude.json`, memories, skills, `tmp\arg0` and `state.db` are outside the cleaner's authority |
+| Gaming | Steam shader cache | STRICT | `steamapps\shadercache` in every library found through `libraryfolders.vdf`; `common`, `compatdata` and manifests are never included |
+| Gaming | Steam staging temp | CAREFUL | `steamapps\temp`, only with Steam closed |
+| Gaming | VRChat cache | CAREFUL | `LocalLow\VRChat\VRChat\Cache-WindowsPlayer`; `config.json`, screenshots and moderation data stay |
+| Gaming | Epic Launcher web cache | CAREFUL | `Saved\webcache*`, only with the launcher closed |
+| Gaming | Roblox / Minecraft logs | SAFE | `*.log*` older than seven days; autosaves, saves, mods and packs stay |
+| Dev | pip / npm / NuGet HTTP caches | SAFE | Download caches only; the NuGet global packages folder is not included |
+| Dev | Unreal DerivedDataCache, Gradle caches | STRICT | Rebuild cost is printed before the confirmation |
+| Dev | Unity project `Library` | REPORT | Not enumerated: project paths cannot be discovered safely |
+
+Every row carries its source and rebuild impact. **Clean SAFE caches** only offers SAFE rows whose layout is verified and whose app is closed; STRICT and CAREFUL rows need the category id typed back. **Export JSON report** writes the measurement, not a promise of reclaimed space.
+
+The scan is bounded (50,000 files per category) so a large library cannot freeze the console. Sizes are estimates; each cleanup reports the bytes it actually removed, plus skipped files.
+
+## Guards
+
+The existing choke point still decides every deletion: protected names, reparse points in any parent, reparse points or protected names inside a directory, and locked files all skip. The explorer adds four gates on top:
+
+1. `Delete = false` categories are measured and refused, never removed.
+2. A `Signature` folder must exist, so a lookalike directory is not treated as the app's cache.
+3. A running application blocks its own category.
+4. A cache root holding a protected folder is refused whole instead of being half-emptied.
+
+`AgeDays` is checked per item immediately before removal. Cache deletion is irreversible and may require a rebuild or a re-download; no automatic recovery is offered, and a quarantined folder on the same drive would not reclaim space anyway.
 
 ## Registry care
 

@@ -1,5 +1,16 @@
 # Validation report
 
+## 3.2.0 verification — November 7, 2026
+
+PC Cleaner 1.2.0 adds the Cache Explorer. No live cache, game, project or user folder was read or deleted.
+
+- 30 new fixture checks (`tests/Test_CacheExplorer.ps1`) cover a verified cache deleting only its contents, a cache root holding a protected folder refused whole, a junction neither measured nor deleted through, a locked file skipped and reported, bracket/apostrophe paths, missing environment roots, report-only entries refusing deletion, `sessions`/`globalStorage`/`state.db`/`.claude`/`mods` protected inside a cache-shaped folder, VRChat config and screenshots surviving a cache clean, Steam shadercache leaving `steamapps\common` alone, catalog paths never naming game data, a post-scan rename to a protected name refused, idempotent repeats, disjoint overlap accounting, a read-only scan, the exported JSON report, a running application blocking its category, and an unproven layout signature refused.
+- The existing cleaner suite passes unchanged at 57 checks; the self-test passes.
+- `Validate_All.ps1` passes for 46 PowerShell files. The native suite passes 689 assertions in ten suites: OneDrive 45, base 117, Suite 62, Cleaner 57, Cache Explorer 30, DNS/privacy 104, repair/gaming 49, launchers 125, final gaming 35, final Fixer 65. Smoke test: 66 controls, 20 optimization choices.
+- Catalog scope: 16 categories, 12 deletable, 4 report-only. AI assistant homes, model stores and Unity libraries are report-only; Steam catalog paths are `shadercache` and `temp` only.
+
+Remaining limits are unchanged for the rest of the toolkit. For the explorer in particular: sizes are estimates taken at scan time, a cache can change before deletion, a partially failed recursive removal can leave some files, and there is no undo. Category layouts were verified against documented locations, not against a live install of every product; a missing or different layout simply produces no candidate. No shader recompilation or FPS effect was measured.
+
 ## 3.1.4 verification — November 7, 2026
 
 Correctness fix for the MMCSS part of the legacy optimizer repair.

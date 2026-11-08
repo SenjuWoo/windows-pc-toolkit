@@ -25,6 +25,10 @@ Scope: all four `pc-cleaner` source/launcher/documentation files; callers in the
 
 Fixtures clean up their own files, links and registry key. The restricted sandbox cannot create junctions; the native fixture run used the ordinary user process outside that sandbox, without requiring real cleanup or system repair.
 
+## Cache Explorer (1.2.0)
+
+`tests/Test_CacheExplorer.ps1` runs 30 checks against disposable TEMP fixtures: a verified cache removes only its own files, a cache holding a protected folder is refused whole, a junction is neither measured nor deleted through, a locked file is skipped, bracketed apostrophe paths work, missing environment roots are inert, report-only entries refuse deletion, `sessions`/`globalStorage`/`state.db`/`.claude`/`mods` stay protected inside a cache-shaped folder, VRChat config and screenshots survive a cache clean, Steam shadercache cleanup leaves `steamapps\common` alone, catalog paths never name game data, a folder renamed to a protected name after the scan is refused, repeated cleanup removes nothing, overlapping categories report disjoint bytes, a scan modifies nothing, an exported report names the version, a running application blocks its category, and an unproven layout signature is refused. The junction fixture is created and removed as a link; cleanup never follows it.
+
 ## Remaining limits
 
 Cleanup is not atomic with another process renaming filesystem directories between checks and deletion. Permission-denied and locked paths are skipped; scans are estimates for accessible files, and a cache may change during measurement. A partially failed recursive removal can delete some ordinary disposable children before it encounters a locked child. File/cache deletion has no undo. Legacy whole-key registry imports cannot detect every intervening edit, hence their explicit confirmation. No real user cache, Windows.old, app package, service or Windows Update data was cleaned during this audit; no live performance benefit is claimed.

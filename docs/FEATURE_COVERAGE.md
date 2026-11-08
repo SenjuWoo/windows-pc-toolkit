@@ -14,7 +14,7 @@
 | AI | Modern Copilot removal, build-gated Recall feature disable/undo, Edge built-in model/API policies and advanced Windows/browser policies. Separate local AI stores preserved; deleted snapshots/browser models not restored. |
 | Hardware | OS/build, CPU, RAM and services in WPF; GPU/storage/display details in console audits. |
 | Startup/tasks | Run entries and third-party boot/logon tasks with saved-state undo; general task run/stop/delete in Windows Task Scheduler. |
-| Cleanup | Aged Temp, official Delivery Optimization, scan-first cleaner and ReTrim; shaders for troubleshooting only. |
+| Cleanup | Aged Temp, official Delivery Optimization, scan-first cleaner and ReTrim; shaders for troubleshooting only. The Cache Explorer adds read-only discovery for AI, gaming and developer caches, with per-category confirmation and report-only entries for assistant homes and model stores. |
 | Registry care | Typed backups and confirmed dead startup/MuiCache values, no broad sweep. |
 | Repair/recovery | DISM → SFC, update-cache repair, diagnostics, dashboard undo and reports. |
 | DNS | Quad9/AdGuard, per-family state, GUID restore, existing-entry update and rollback. |

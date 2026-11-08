@@ -1,5 +1,14 @@
 # Changelog
 
+## Toolkit 3.2.0 (2026-11-07)
+
+- PC Cleaner 1.2.0 adds a Cache Explorer (menu `[8]`) for AI, gaming and developer caches. It scans read-only, names the source and rebuild cost of every category, exports a JSON report, and deletes only after a typed confirmation.
+- Deletable: Antigravity editor caches (only when its `User` folder proves the layout), Steam `shadercache` and `steamapps` temp per library with Steam closed, VRChat `Cache-WindowsPlayer`, Epic `Saved` webcache folders with the launcher closed, Roblox and Minecraft logs older than seven days, pip/npm/NuGet download caches, and Unreal DDC or Gradle caches as STRICT choices.
+- Report-only: Codex (`CODEX_HOME`), Claude (`CLAUDE_CONFIG_DIR`) and Hermes homes, plus Unity project libraries. Sessions, SQLite state, memories, skills, `.claude.json`, the Codex tmp helper folder, `state.db` and model stores are never in scope.
+- Guards added on top of the existing choke point: `Delete=false` refuses, a required signature folder must exist, a running app blocks its category, a cache root holding a protected folder is refused whole, and `AgeDays` is rechecked per item before removal.
+- Tests: new `tests/Test_CacheExplorer.ps1` with 30 fixture checks (junction, locked file, protected names, report-only, idempotency, overlap accounting, post-scan rename, export). No live cache was touched.
+
+
 ## Toolkit 3.1.4 (2026-11-07)
 
 - The legacy optimizer repair no longer deletes or rewrites the MMCSS Games block. The previous conditional write could never work: the blanket removal loop deleted those six values first, so every repair rewrote them from a guess. The block is now journaled for undo, skipped by the deletion loop and left untouched, because Microsoft documents the value ranges while the shipping defaults differ by build. Other legacy overrides are still removed with the same snapshot.
