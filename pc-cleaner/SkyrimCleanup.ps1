@@ -59,8 +59,10 @@ function Get-SkyrimToolTargets {
 }
 
 function Test-SkyrimClosed {
+    # Only the game and its loader write these logs. A running mod manager keeps its own state
+    # open, not the SKSE log files, so it does not block a per-file delete.
     param($Game)
-    $names = @('SkyrimSE', 'SkyrimVR', 'skse64_loader', 'ModOrganizer', 'Vortex')
+    $names = @('SkyrimSE', 'SkyrimVR', 'skse64_loader')
     if ($Game -and $Game.Process) { $names = @($Game.Process, 'skse64_loader') }
     foreach ($name in $names) {
         if (@(Get-Process -Name $name -ErrorAction SilentlyContinue).Count) { return $false }
