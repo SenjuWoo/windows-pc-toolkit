@@ -1,5 +1,16 @@
 # Validation report
 
+## 3.3.0 verification — November 7, 2026
+
+Cache-scanner corrections and the Skyrim & Modding Cleanup. No live cache or game log was deleted.
+
+- Fixed and covered by regressions: wildcard directory patterns measured as directories (2 dirs, 2 files, exact bytes removed), a bounded scan that stops early (`MaxFiles 5` reports `Capped` with 5 files), a fresh file nested in an old tree surviving an `AgeDays 7` clean, removed bytes equal to the scan's eligible bytes, a file refreshed after the scan being kept, and unique report filenames when two exports happen in the same second.
+- Skyrim suite (16 checks) uses a fake Documents root: SE SKSE and Papyrus detected, only `.log` files counted, SAFE removes aged logs and keeps the recent one, HARD removes recent ones, `skse.ini`/`settings.json`/`plugin.dll`/`notes.txt`/saves survive, a log outside the approved folder is refused, a non-log in the approved folder is refused, a nested file is outside the root, cloud-synced Documents are report-only, unrelated documents stay.
+- `Validate_All.ps1` passes for 48 PowerShell files. The native suite passes 716 assertions in eleven suites: OneDrive 45, base 117, Suite 62, Cleaner 57, Cache Explorer 41, Skyrim 16, DNS/privacy 104, repair/gaming 49, launchers 125, final gaming 35, final Fixer 65. Smoke test: 66 controls, 20 optimization choices.
+- Catalog: 16 cache categories (10 deletable, 6 report-only incl. Steam staging and Epic webcache) plus 2 Skyrim log groups.
+
+Remaining limits: scanner sizes are estimates, a cache or log can change between scan and deletion, a partially failed removal can leave some files, there is no undo, and no shader recompilation or FPS effect was measured. MO2, Vortex, DynDOLOD, xEdit and Creation Kit logs are not auto-detected.
+
 ## 3.2.0 verification — November 7, 2026
 
 PC Cleaner 1.2.0 adds the Cache Explorer. No live cache, game, project or user folder was read or deleted.
