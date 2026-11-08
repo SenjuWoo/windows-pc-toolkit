@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 $script:SuiteRoot=Split-Path $PSScriptRoot -Parent
 $script:SuiteDataRoot=$DataRoot
-$script:SuiteVersion='3.1.3'
+$script:SuiteVersion='3.1.4'
 
 function Write-SuiteDiagnostic {
     param([string]$Operation,[string]$Message,[string]$Level='Debug',[string]$RunId)

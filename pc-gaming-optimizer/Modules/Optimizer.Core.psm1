@@ -3,6 +3,9 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:ToolkitVersion = '5.0.2'
+# The Games task block is journaled but never rewritten: Microsoft documents its value ranges,
+# and the shipping defaults differ by Windows build, so a rewrite would be a guess.
+$script:GamingGamesTaskPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'
 $script:StateRoot = Join-Path $env:ProgramData 'WindowsPCToolkit\GamingOptimizer'
 $script:SnapshotRoot = Join-Path $script:StateRoot 'Snapshots'
 $script:LogRoot = Join-Path $script:StateRoot 'Logs'
@@ -178,12 +181,12 @@ function Get-GamingRegistryTargets {
         @{Path='HKCU:\Control Panel\Mouse';Name='MouseThreshold2'},
         @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile';Name='NetworkThrottlingIndex'},
         @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile';Name='SystemResponsiveness'},
-        @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games';Name='GPU Priority'},
-        @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games';Name='Priority'},
-        @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games';Name='Scheduling Category'},
-        @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games';Name='SFIO Priority'},
-        @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games';Name='Background Only'},
-        @{Path='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games';Name='Clock Rate'},
+        @{Path=$script:GamingGamesTaskPath;Name='GPU Priority'},
+        @{Path=$script:GamingGamesTaskPath;Name='Priority'},
+        @{Path=$script:GamingGamesTaskPath;Name='Scheduling Category'},
+        @{Path=$script:GamingGamesTaskPath;Name='SFIO Priority'},
+        @{Path=$script:GamingGamesTaskPath;Name='Background Only'},
+        @{Path=$script:GamingGamesTaskPath;Name='Clock Rate'},
         @{Path='HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl';Name='Win32PrioritySeparation'},
         @{Path='HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management';Name='LargeSystemCache'},
         @{Path='HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem';Name='NtfsDisable8dot3NameCreation'},
@@ -685,33 +688,19 @@ function Invoke-LegacyOptimizerRepair {
     if ($confirm -notmatch '^[Yy]$') { return }
     $targets=@(Get-GamingRegistryTargets | Where-Object { $_.Name -notin @('AllowAutoGameMode','AutoGameModeEnabled','GameDVR_Enabled','AppCaptureEnabled','HwSchMode','MouseSpeed','MouseThreshold1','MouseThreshold2') })
     New-GamingSnapshot -Reason 'Repair v3.x legacy tweaks' -RegistryTargets $targets -IncludeServices -IncludeNetwork -IncludeBcd | Out-Null
+    # Snapshot first, then delete. The Games block stays out of the deletion loop: its values are
+    # journaled above for undo, but removing or rewriting them here would destroy a configuration
+    # this repair cannot prove was a v3.x tweak.
     foreach($target in $targets){
+        if($target.Path -eq $script:GamingGamesTaskPath){continue}
         Remove-RegistryValueIfPresent $target.Path $target.Name
     }
-    $games='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'
-    # Microsoft's documented Games task defaults. The snapshot above already holds whatever
-    # was there, so undo restores a custom configuration; a value already at the default is
-    # left untouched instead of being rewritten.
-    $defaults=@(
-        @{Name='GPU Priority';Value=8;Kind='DWord'},
-        @{Name='Priority';Value=2;Kind='DWord'},
-        @{Name='Scheduling Category';Value='Medium';Kind='String'},
-        @{Name='SFIO Priority';Value='Normal';Kind='String'},
-        @{Name='Background Only';Value='True';Kind='String'})
-    $reset=0
-    foreach($default in $defaults){
-        $current=Get-RegistryValueState -Path $games -Name $default.Name
-        if($current.Exists -and ([string]$current.Value -eq [string]$default.Value)){continue}
-        Set-RegistryValueExact $games $default.Name $default.Value $default.Kind
-        $reset++
-    }
-    Remove-RegistryValueIfPresent $games 'Clock Rate'
     Remove-GamingBcdOverrides
     # SysMain startup and network offloads are configuration, not leftovers of a v3.x tweak,
     # and the value before the tweak was never recorded. Report them instead of forcing a guess.
     $sysMain=Get-Service -Name SysMain -ErrorAction SilentlyContinue
     if($sysMain){Write-ToolStatus INFO ("SysMain is {0} / {1}; left unchanged." -f $sysMain.Status,$sysMain.StartType)}
-    Write-ToolStatus OK ("Legacy optimizer overrides removed; {0} MMCSS value(s) reset to the documented default. DNS, GPU drivers, power plan, network offloads and TCP autotuning were preserved." -f $reset)
+    Write-ToolStatus OK 'Legacy optimizer overrides removed. MMCSS Games values were left as they are (Windows defaults differ by build, so no value was guessed); DNS, GPU drivers, power plan, network offloads and TCP autotuning were preserved.'
     Write-ToolStatus INFO 'Reboot recommended.'
 }
 

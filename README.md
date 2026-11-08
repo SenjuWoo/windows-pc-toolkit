@@ -18,7 +18,7 @@
 
 [![CI](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/SenjuWoo/windows-pc-toolkit/actions/workflows/ci.yml) · [MIT license](LICENSE) · [Changelog](CHANGELOG.md)
 
-**[Download v3.1.3](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.3/Windows-PC-Toolkit-3.1.3.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.1.3)
+**[Download v3.1.4](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.4/Windows-PC-Toolkit-3.1.4.zip)** · [Release notes and checksums](https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.1.4)
 
 **Check OneDrive before uninstalling it.** If your folders are already local, no OneDrive sign-in is needed. If backup is active, stop it in OneDrive's Manage backup and choose **Only on my PC**; download online-only files first if prompted. That Microsoft choice removes the cloud copy, so keep an independent backup if you need both. The toolkit checks folder locations and modern local aliases, blocks uncertain locations, and rechecks before opening Installed apps. It does not uninstall OneDrive, move files or rewrite folder locations. [Recovery instructions](docs/ONEDRIVE_RECOVERY.md) · [Safety audit](docs/AUDIT_2026-10-11.md) · [Validation and limits](VALIDATION_REPORT.md).
 
@@ -32,7 +32,7 @@ The OneDrive page with read-only status from a local-folder configuration; the p
 
 ## Start here
 
-Download the **[complete v3.1.3 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.3/Windows-PC-Toolkit-3.1.3.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
+Download the **[complete v3.1.4 ZIP](https://github.com/SenjuWoo/windows-pc-toolkit/releases/download/v3.1.4/Windows-PC-Toolkit-3.1.4.zip)**, extract it into a new folder, then double-click **START_TOOLKIT.bat**. Accept UAC for your own Windows account. Keep the tool folders and shared `Modules` folder together; individual tools depend on the complete bundle.
 
 For an upgrade, close the old dashboard and launch the newly extracted copy. Existing reports and recovery backups in `%ProgramData%\WindowsPCToolkit` remain available. The release includes `SHA256SUMS.txt` and `release-provenance.json`; compare the ZIP with `Get-FileHash -Algorithm SHA256` to verify your download. GitHub's **Code → Download ZIP** provides development source, which can differ from the release.
 
@@ -116,7 +116,7 @@ Advanced consoles retain directories under `%ProgramData%\WindowsPCToolkit`: `Ga
 
 | Component | Version | Documentation |
 | --- | ---: | --- |
-| Dashboard / core | 3.1.3 | This page |
+| Dashboard / core | 3.1.4 | This page |
 | Gaming Optimizer | 5.0.2 | [Gaming](pc-gaming-optimizer/README.md) |
 | PC Cleaner | 1.1.2 | [Cleanup/registry](pc-cleaner/README.md) |
 | Corruption Fixer | 7.2.2 | [Repair](pc-corruption-fixer/README.md) |
