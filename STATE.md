@@ -4,7 +4,7 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.1.2 is published and delivered.** Release commit `12ce6d7fcce69934656bbe42051f9e5e3b652597`, annotated tag `v3.1.2` (tag object `de5ad361a3e3ae450ad283d8318ce5a4b2b13078`), published 2026-11-07. The payload was downloaded again, matched to that commit blob for blob, and tested after extraction. A third portable copy is extracted beside 3.1.1 and 3.0.2.
+**3.1.2 is published and delivered.** Release commit `12ce6d7fcce69934656bbe42051f9e5e3b652597`, annotated tag `v3.1.2` (tag object `de5ad361a3e3ae450ad283d8318ce5a4b2b13078`), published 2026-11-07. The payload was downloaded again, matched to that commit blob for blob, and tested after extraction. A portable copy is extracted at `Windows-PC-Toolkit-3.1.2`; the earlier 3.0.2 and 3.1.1 extracts are no longer present in the workspace (checked 2026-11-07), while both previous releases remain on GitHub.
 
 ## Published release, verified 2026-11-07
 
@@ -60,6 +60,6 @@ No live optimization, debloat, OneDrive uninstall, shell-folder migration, DNS c
 
 ## Last known good and preservation
 
-- Current: `Windows-PC-Toolkit-3.1.2` beside `Windows-PC-Toolkit-3.1.1` and `Windows-PC-Toolkit` (3.0.2). Keep all three; do not edit an extracted copy.
+- Current: `Windows-PC-Toolkit-3.1.2` (71 files, matches the published ZIP). The 3.0.2 and 3.1.1 extracts were absent from the workspace on 2026-11-07 and were not re-created; `3.0.2`, `3.1.1` and `3.1.2` remain downloadable from GitHub. Do not edit an extracted copy.
 - Prior public releases remain at https://github.com/SenjuWoo/windows-pc-toolkit/releases .
 - Changelog: `CHANGELOG.md`. Release note source: `docs/releases/v3.1.2.md`. Release steps: `docs/RELEASING.md`.
