@@ -23,19 +23,22 @@ Menu `[8]` in the console opens a read-only scan of caches that are usually safe
 | AI | Antigravity editor caches | SAFE | `Cache`, `Code Cache`, `CachedData`, `GPUCache` under `%APPDATA%\Antigravity`, and only when the sibling `User` folder proves the layout |
 | AI | Codex / Claude / Hermes home | REPORT | Measured, never deleted. Sessions, SQLite state, `.claude.json`, memories, skills, `tmp\arg0` and `state.db` are outside the cleaner's authority |
 | Gaming | Steam shader cache | STRICT | `steamapps\shadercache` in every library found through `libraryfolders.vdf`; `common`, `compatdata` and manifests are never included |
-| Gaming | Steam staging temp | CAREFUL | `steamapps\temp`, only with Steam closed |
-| Gaming | VRChat cache | CAREFUL | `LocalLow\VRChat\VRChat\Cache-WindowsPlayer`; `config.json`, screenshots and moderation data stay |
-| Gaming | Epic Launcher web cache | CAREFUL | `Saved\webcache*`, only with the launcher closed |
+| Gaming | Steam staging temp | REPORT | `steamapps\temp` can hold an unfinished update, so it is measured and never removed |
+| Gaming | VRChat cache | CAREFUL | the `config.json` `cache_directory` when it passes the cleanup-root validator, else `LocalLow\VRChat\VRChat\Cache-WindowsPlayer`; `config.json`, screenshots and moderation data stay |
+| Gaming | Epic Launcher web cache | REPORT | `Saved\webcache*`; the browser `WebCache` guard covers this name, so clear it from the launcher |
 | Gaming | Roblox / Minecraft logs | SAFE | `*.log*` older than seven days; autosaves, saves, mods and packs stay |
 | Dev | pip / npm / NuGet HTTP caches | SAFE | Download caches only; the NuGet global packages folder is not included |
-| Dev | Unreal DerivedDataCache, Gradle caches | STRICT | Rebuild cost is printed before the confirmation |
+| Dev | Unreal DerivedDataCache, Gradle caches | STRICT | Rebuild cost is printed before the confirmation; the editor or JVM must be closed |
+| Dev | Yarn cache | SAFE | `Yarn\Cache`, `Yarn\Berry\cache`; packages download again |
+| Dev | pnpm store | REPORT | Hard-linked into every project; `pnpm store prune` is the right tool |
+| Gaming | GPU driver + DirectX shader caches | STRICT | `NVIDIA\DXCache`, `NVIDIA\GLCache`, `AMD\DxCache`, `D3DSCache`; opt in, recompiles cause first-launch stutter |
 | Dev | Unity project `Library` | REPORT | Not enumerated: project paths cannot be discovered safely |
 
 Every row carries its source and rebuild impact. **Clean SAFE caches** only offers SAFE rows whose layout is verified and whose app is closed; STRICT and CAREFUL rows need the category id typed back. **Export JSON report** writes the measurement, not a promise of reclaimed space.
 
 The scan is bounded (50,000 files per category) so a large library cannot freeze the console. Sizes are estimates; each cleanup reports the bytes it actually removed, plus skipped files.
 
-## Skyrim & Modding Cleanup (1.3.0, menu `[9]`)
+## Skyrim & Modding Cleanup (menu `[9]`)
 
 Resolves the Windows Documents known folder and searches only `My Games\Skyrim Special Edition` and `My Games\Skyrim VR`:
 
@@ -43,6 +46,11 @@ Resolves the Windows Documents known folder and searches only `My Games\Skyrim S
 | --- | --- | --- |
 | `SKSE` | `.log` / `.logN` from SKSE and plugins | SAFE (older than 7 days) or HARD (any age) |
 | `Logs\Script` | `Papyrus*.log` rotations | SAFE or HARD |
+| MO2 `logs` | `mo_interface*.log`, `usvfs-*.log` | SAFE or HARD |
+| Vortex | `vortex*.log` | SAFE or HARD |
+| DynDOLOD `Logs` | `DynDOLOD_*_log.txt`, `TexGen_*_log.txt`, `LODGen_*_log.txt` | SAFE or HARD |
+
+A portable MO2 or DynDOLOD install is listed only when its folder is passed in (menu `[5]`); no drive is searched. Mods, profiles, overwrite, downloads, Vortex state and generated LOD output are never eligible.
 
 Only those extensions are eligible. Saves, `.ini`, `.json`, `.toml`, `.yaml`, `.dll`, `.pex`, `.psc`, archives and unknown types stay. This is the one approved bypass of the `Documents` guard: the file must be a direct child of an approved game-log folder, match the log pattern, be regular and have no reparse point in any parent — rechecked immediately before deletion. Cloud-synced Documents folders and Mod Organizer 2 / Vortex data folders are report-only.
 

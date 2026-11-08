@@ -1,5 +1,17 @@
 # Validation report
 
+## 3.4.0 verification — November 8, 2026
+
+Deletion-safety hardening and modding coverage. No live cache, game or modding log was deleted.
+
+- **Cleanup-root validator** (16 new checks): a dedicated cache is accepted; drive root, profile, LocalAppData, LocalLow, SystemRoot, Program Files and a non-cache folder are refused; Documents is refused; a junction standing in for a root is refused and never traversed; an entry whose configured root is the profile is refused at execution, not only at scan.
+- **VRChat**: `cache_directory` is read and a changed value is re-read rather than cached; a path that fails the validator is measured and kept. The wildcard-directory regression (Epic shape) proves measurement and cleanup agree: two `webcache_*` folders, 2 files, 11 bytes measured and 11 bytes removed.
+- **Skyrim (28 checks)**: SE SKSE and Papyrus detected; only `.log`/`.logN` counted; SAFE removes aged logs and keeps the recent one; HARD removes recent; `skse.ini`, `settings.json`, `plugin.dll`, `notes.txt` and saves survive; a forged scan row pointing at `Documents` deletes nothing and leaves the document; a game detected as running at cleanup time blocks; a Documents root that changed to a cloud path blocks; a directory named like a log is refused; a nested file is outside the approved root; MO2, Vortex and DynDOLOD rows remove exactly the seven verified diagnostic logs while `important.esp`, `state.v2` and `notes.txt` survive.
+- Suite: **743 assertions** in eleven suites (45 OneDrive, 117 base, 62 suite, 57 cleaner, 56 cache explorer, 28 Skyrim, 104 DNS/privacy, 49 repair/gaming, 125 launchers, 35 final gaming, 65 final Fixer), exit 0. `Validate_All.ps1`: all checks passed. Smoke test: dashboard loads.
+- Catalog: 20 categories — 13 deletable, 7 report-only (Codex, Claude, Hermes, Steam staging, Epic webcache, pnpm store, Unity Library).
+
+Remaining limits: the validator reasons about paths, not intent — a folder named `Cache` outside every reserved location is still eligible, which is why every deletion is confirmed and reported by name. MO2/Vortex/DynDOLOD coverage uses their documented default folders; portable installs appear only when selected. Sizes are estimates; a partially failed removal leaves some files; there is no undo; shader recompilation and FPS effects were not measured.
+
 ## 3.3.0 verification — November 7, 2026
 
 Cache-scanner corrections and the Skyrim & Modding Cleanup. No live cache or game log was deleted.

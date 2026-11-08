@@ -237,6 +237,57 @@ try {
     $two = Export-CacheScan -Scan $scan
     Check ($one -ne $two -and (Test-Path -LiteralPath $one) -and (Test-Path -LiteralPath $two)) 'Reports written together get unique names'
 
+    # 23. The cleanup-root validator refuses broad or shared locations and accepts a real cache.
+    $deep = Join-Path $fixture 'apps\SomeApp\Cache'
+    [void][IO.Directory]::CreateDirectory($deep)
+    Check ((Test-CleanupRoot -Path $deep).Ok) 'A dedicated cache folder is accepted as a cleanup root'
+    foreach ($bad in @('C:\', $env:USERPROFILE, $env:LOCALAPPDATA, "$env:USERPROFILE\AppData\LocalLow", $env:SystemRoot, $env:ProgramFiles, (Join-Path $fixture 'apps\SomeApp'))) {
+        $verdict = Test-CleanupRoot -Path $bad
+        Check (-not $verdict.Ok) ("'{0}' is refused as a cleanup root ({1})" -f $bad, $verdict.Reason)
+    }
+    $docs = [Environment]::GetFolderPath('MyDocuments')
+    if ($docs) { Check (-not (Test-CleanupRoot -Path $docs).Ok) 'The Documents folder is refused as a cleanup root' }
+
+    # 24. A junction standing in for a cache root is refused, never followed.
+    $realCache = Join-Path $fixture 'real\Cache'
+    [void][IO.Directory]::CreateDirectory($realCache)
+    $linkCache = Join-Path $fixture 'link\Cache'
+    [void][IO.Directory]::CreateDirectory((Split-Path $linkCache -Parent))
+    $made = $false
+    try { cmd /c mklink /J "$linkCache" "$realCache" | Out-Null; $made = $true } catch { $made = $false }
+    if ($made) {
+        Check (-not (Test-CleanupRoot -Path $linkCache).Ok) 'A junction is refused as a cleanup root'
+        'keep' | Set-Content -LiteralPath (Join-Path $realCache 'keep.tmp')
+        $r = Invoke-CacheClean -Entry (New-Entry 'LinkCache' @($linkCache))
+        Check ($r.Removed -eq 0 -and (Test-Path -LiteralPath (Join-Path $realCache 'keep.tmp'))) 'Cleanup does not traverse a junction'
+        [IO.Directory]::Delete($linkCache)
+    }
+
+    # 25. A category that changes its own configured location after the scan is refused.
+    $cfg = Join-Path $fixture 'vrchat\config.json'
+    [void][IO.Directory]::CreateDirectory((Split-Path $cfg -Parent))
+    $cacheA = Join-Path $fixture 'vr\CacheA'
+    $cacheB = Join-Path $fixture 'vr\CacheB'
+    [void][IO.Directory]::CreateDirectory($cacheA)
+    [void][IO.Directory]::CreateDirectory($cacheB)
+    'a' | Set-Content -LiteralPath (Join-Path $cacheA 'a.bin')
+    # ConvertTo-Json escapes separators itself; a hand-built string is host-dependent.
+    @{ cache_directory = $cacheA } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfg -Encoding UTF8
+    $readA = [IO.Path]::GetFullPath((Get-VRChatCachePath -ConfigPath $cfg))
+    Check ([string]::Equals($readA.TrimEnd([char]92), [IO.Path]::GetFullPath($cacheA).TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) 'The configured cache_directory is read'
+    @{ cache_directory = $cacheB } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfg -Encoding UTF8
+    $readB = [IO.Path]::GetFullPath((Get-VRChatCachePath -ConfigPath $cfg))
+    Check ([string]::Equals($readB.TrimEnd([char]92), [IO.Path]::GetFullPath($cacheB).TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) 'A changed cache_directory is re-read, not cached'
+
+    # 26. An entry whose configured path is broad is refused at execution, not just at scan.
+    $unsafe = [pscustomobject]@{ Id = 'VRChatCache'; Section = 'Gaming'; Label = 'VRChat cache'; Risk = 'CAREFUL'; Delete = $true
+        AgeDays = 0; RequireProcess = $null; Signature = $null; RootPolicy = 'DedicatedCache'; Paths = @($env:USERPROFILE)
+        Impact = 'fixture'; Source = 'fixture' }
+    $r = Invoke-CacheClean -Entry $unsafe
+    Check ($r.Status -eq 'Skipped' -and $r.Removed -eq 0) 'A profile root configured as a cache is refused at execution'
+    $r = Invoke-CacheClean -Entry (New-Entry 'DriveRoot' @('C:\'))
+    Check ($r.Status -eq 'Skipped' -and $r.Removed -eq 0) 'A drive root is never cleaned'
+
     Write-Host "PASS: $checks cache explorer checks. Fixtures under TEMP only." -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $fixture) {
