@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if ($ExpectedUserSid -and [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $ExpectedUserSid) { throw 'Run Cleaner as an administrator for your own Windows account; a different account would clean and change the wrong user profile.' }
-$Script:Version = '1.1.2'
+$Script:Version = '1.2.0'
 $script:CleanerDebugEnabled = ($Action -ne 'Library' -and ($DebugLog -or $env:WINDOWS_PC_TOOLKIT_DEBUG -eq '1'))
 $StateRoot      = Join-Path $env:ProgramData 'WindowsPCToolkit\Cleaner'
 $LogRoot        = Join-Path $StateRoot 'Logs'
@@ -93,7 +93,10 @@ $Script:ProtectedNames = @(
     # user folders
     'Desktop','Documents','Pictures','Videos','Music','Favorites','Contacts','Saved Games',
     'OneDrive','Dropbox','Google Drive',
-    '.ollama','.lmstudio','huggingface','torch','whisper','.llama.cpp'
+    '.ollama','.lmstudio','huggingface','torch','whisper','.llama.cpp',
+    # application state that a cache folder can sit next to
+    'saves','mods','globalStorage','workspaceStorage','state.db','.codex','.claude','.git','Library',
+    'Screenshots','Recordings','Captures'
 )
 
 function Test-IsProtectedPath {
@@ -396,6 +399,13 @@ function Invoke-CleanCategory {
     param($Category)
     $result = [pscustomobject]@{ Id = $Category.Id; Label = $Category.Label; Removed = 0; Skipped = 0; Bytes = [long]0; Note = ''; Status='Completed' }
     if ($Category.Profile -eq 'Report' -or $Category.Kind -eq 'Report' -or $Category.Id -in @('WindowsOld','BakFiles','WUCache','RecallData','AiAppCaches','ModelStores')) { $result.Status='Skipped'; $result.Note='Review only; kept all files.'; return $result }
+    # Catalog gates: an explicit Delete=false, an unproven layout or a running app stops the whole
+    # category before anything is touched. Age is enforced per item below.
+    if ($Category.PSObject.Properties.Name -contains 'Delete' -and -not $Category.Delete) { $result.Status='Skipped'; $result.Note='Review only; kept all files.'; return $result }
+    if ($Category.PSObject.Properties.Name -contains 'Signature' -and $Category.Signature -and -not (Test-Path -LiteralPath $Category.Signature)) { $result.Status='Skipped'; $result.Note='Layout not verified on this PC.'; return $result }
+    if ($Category.PSObject.Properties.Name -contains 'RequireProcess' -and $Category.RequireProcess -and @(Get-Process -Name $Category.RequireProcess -ErrorAction SilentlyContinue).Count) { $result.Status='Skipped'; $result.Note=("Close {0} first." -f $Category.RequireProcess); return $result }
+    $cutoff = $null
+    if (($Category.PSObject.Properties.Name -contains 'AgeDays') -and $Category.AgeDays) { $cutoff = (Get-Date).AddDays(-[double]$Category.AgeDays) }
     switch ($Category.Kind) {
         'Children' {
             foreach ($dir in Resolve-CategoryDirs -Category $Category) {
@@ -409,8 +419,13 @@ function Invoke-CleanCategory {
                     }
                     continue
                 }
+                # A cache root that holds a protected folder is not the layout we expect: refuse the
+                # whole root instead of deleting its siblings and leaving a half-empty folder.
+                $blockedChild = @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue | Where-Object { Test-IsProtectedPath $_.FullName } | Select-Object -First 1)
+                if ($blockedChild.Count) { $result.Skipped++; $result.Note='Protected folder inside; kept all files.'; continue }
                 foreach ($child in @(Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)) {
                     if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { $result.Skipped++; continue }
+                    if ($cutoff -and $child.LastWriteTime -ge $cutoff) { $result.Skipped++; continue }
                     $size = if ($child.PSIsContainer) {
                         [long](@(Get-CleanTreeFiles $child.FullName | Measure-Object -Property Length -Sum).Sum)
                     } else { [long]$child.Length }
@@ -423,6 +438,7 @@ function Invoke-CleanCategory {
         }
         'Files' {
             foreach ($f in Resolve-CategoryFiles -Category $Category) {
+                if ($cutoff -and $f.LastWriteTime -ge $cutoff) { $result.Skipped++; continue }
                 if (Remove-ItemSafe -Path $f.FullName) { $result.Removed++; $result.Bytes += [long]$f.Length }
                 else { $result.Skipped++ }
             }
@@ -864,6 +880,211 @@ function Invoke-SelfTest {
 }
 
 # ============================================================================
+#  CACHE CATALOG - AI, gaming and developer caches
+#  Every row names its source and rebuild cost. Delete=$false is report-only:
+#  the scan measures it and the cleaner refuses to remove it.
+# ============================================================================
+
+function Get-SteamLibraryRoots {
+    # Extra Steam libraries live in libraryfolders.vdf; bounded, read-only parse.
+    $roots = New-Object System.Collections.Generic.List[string]
+    foreach ($steam in @("${env:ProgramFiles(x86)}\Steam", "$env:ProgramFiles\Steam")) {
+        if (-not $steam) { continue }
+        $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
+        if (-not (Test-Path -LiteralPath $vdf -PathType Leaf)) { continue }
+        $roots.Add($steam)
+        foreach ($m in [regex]::Matches((Get-Content -LiteralPath $vdf -Raw -ErrorAction SilentlyContinue), '"path"\s+"([^"]+)"')) {
+            $roots.Add($m.Groups[1].Value.Replace('\\','\'))
+        }
+    }
+    return @($roots | Select-Object -Unique)
+}
+
+function Get-CacheCatalog {
+    $L = $env:LOCALAPPDATA; $A = $env:APPDATA; $U = $env:USERPROFILE
+    $codex  = if ($env:CODEX_HOME)  { $env:CODEX_HOME }  else { Join-Path $U '.codex' }
+    $claude = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $U '.claude' }
+    $hermes = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $L 'hermes' }
+    $steam = @(Get-SteamLibraryRoots)
+    $shaderPaths = @(); $steamTemp = @()
+    foreach ($root in $steam) { $shaderPaths += (Join-Path $root 'steamapps\shadercache'); $steamTemp += (Join-Path $root 'steamapps\temp') }
+
+    @(
+        [pscustomobject]@{ Id='AntigravityCaches'; Section='AI'; Label='Antigravity editor caches'; Risk='SAFE'; Delete=$true; Kind='Children'; AgeDays=0; RequireProcess='Antigravity';
+            Paths=@("$A\Antigravity\Cache","$A\Antigravity\Code Cache","$A\Antigravity\CachedData","$A\Antigravity\GPUCache"); Signature="$A\Antigravity\User";
+            Impact='Rebuilt on next start. User, globalStorage, workspaceStorage, History and extensions are excluded.'; Source='Requires the sibling User folder to prove the layout' }
+        [pscustomobject]@{ Id='CodexState'; Section='AI'; Label='Codex home (report only)'; Risk='REPORT'; Delete=$false; Kind='Children'; AgeDays=0;
+            Paths=@((Join-Path $codex 'log')); Impact='Sessions, archived sessions, SQLite state, config, credentials, plugins and tmp\arg0 are never touched.'; Source='CODEX_HOME / %USERPROFILE%\.codex - layout not verified for deletion' }
+        [pscustomobject]@{ Id='ClaudeState'; Section='AI'; Label='Claude home (report only)'; Risk='REPORT'; Delete=$false; Kind='Children'; AgeDays=0;
+            Paths=@((Join-Path $claude 'shell-snapshots')); Impact='.claude.json, settings, projects, sessions, plugins, permissions and memories are never touched.'; Source='CLAUDE_CONFIG_DIR / %USERPROFILE%\.claude - reported only' }
+        [pscustomobject]@{ Id='HermesScratch'; Section='AI'; Label='Hermes scratch cache (report only)'; Risk='REPORT'; Delete=$false; Kind='Children'; AgeDays=1;
+            Paths=@((Join-Path $hermes 'cache\scratch')); Impact='Hermes prunes entries idle for 24h itself; state.db, sessions, skills and profiles are never touched.'; Source='Hermes-managed lifecycle' }
+
+        [pscustomobject]@{ Id='SteamShaderCache'; Section='Gaming'; Label='Steam shader cache (per library)'; Risk='STRICT'; Delete=$true; Kind='Children'; AgeDays=0; RequireProcess='steam';
+            Paths=$shaderPaths; Impact='Shaders recompile on next launch: stutter and possible re-download. Never touches common, compatdata or app manifests.'; Source='Steam support: shader cache can be rebuilt' }
+        [pscustomobject]@{ Id='SteamTemp'; Section='Gaming'; Label='Steam staging temp'; Risk='CAREFUL'; Delete=$true; Kind='Children'; AgeDays=1; RequireProcess='steam';
+            Paths=$steamTemp; Impact='Partial update staging only; games and manifests are outside this folder.'; Source='steamapps\temp' }
+        [pscustomobject]@{ Id='VRChatCache'; Section='Gaming'; Label='VRChat downloaded content cache'; Risk='CAREFUL'; Delete=$true; Kind='Children'; AgeDays=0; RequireProcess='VRChat';
+            Paths=@("$L\..\LocalLow\VRChat\VRChat\Cache-WindowsPlayer"); Impact='Avatars and worlds download again. config.json, screenshots and local moderation data are outside this folder.'; Source='VRChat local storage docs (default location only)' }
+        [pscustomobject]@{ Id='RobloxLogs'; Section='Gaming'; Label='Roblox diagnostic logs'; Risk='SAFE'; Delete=$true; Kind='Files'; AgeDays=7;
+            Paths=@("$L\Roblox\logs\*.log*"); Impact='Logs only; Studio autosaves, projects, versions and plugins are untouched.'; Source='Roblox Studio debugging docs' }
+        [pscustomobject]@{ Id='MinecraftLogs'; Section='Gaming'; Label='Minecraft logs'; Risk='SAFE'; Delete=$true; Kind='Files'; AgeDays=7;
+            Paths=@("$A\.minecraft\logs\*.log*"); Impact='Logs only; saves, mods, resource packs and configs are untouched.'; Source='%APPDATA%\.minecraft\logs' }
+        [pscustomobject]@{ Id='EpicWebCache'; Section='Gaming'; Label='Epic Games Launcher web cache'; Risk='CAREFUL'; Delete=$true; Kind='Children'; AgeDays=0; RequireProcess='EpicGamesLauncher';
+            Paths=@("$L\EpicGamesLauncher\Saved\webcache*"); Impact='Launcher pages reload; installed games, manifests and settings are outside these folders.'; Source='Epic support: clear webcache after closing the launcher' }
+
+        [pscustomobject]@{ Id='PipCache'; Section='Dev'; Label='pip download cache'; Risk='SAFE'; Delete=$true; Kind='Children'; AgeDays=0;
+            Paths=@("$L\pip\Cache"); Impact='Packages download again on next install.'; Source='pip cache dir' }
+        [pscustomobject]@{ Id='NpmCache'; Section='Dev'; Label='npm content cache'; Risk='SAFE'; Delete=$true; Kind='Children'; AgeDays=0;
+            Paths=@("$L\npm-cache\_cacache"); Impact='Packages download again.'; Source='npm config cache' }
+        [pscustomobject]@{ Id='NuGetHttpCache'; Section='Dev'; Label='NuGet HTTP cache'; Risk='SAFE'; Delete=$true; Kind='Children'; AgeDays=0;
+            Paths=@("$L\NuGet\v3-cache"); Impact='Packages download again; the global packages folder is not touched.'; Source='NuGet http_cache' }
+        [pscustomobject]@{ Id='UEDerivedData'; Section='Dev'; Label='Unreal DerivedDataCache'; Risk='STRICT'; Delete=$true; Kind='Children'; AgeDays=0;
+            Paths=@("$L\UnrealEngine\Common\DerivedDataCache"); Impact='Shader and asset derivatives rebuild: long first launch.'; Source='UE project/engine DDC' }
+        [pscustomobject]@{ Id='GradleCaches'; Section='Dev'; Label='Gradle build caches'; Risk='STRICT'; Delete=$true; Kind='Children'; AgeDays=0;
+            Paths=@("$U\.gradle\caches"); Impact='Next build re-resolves dependencies and recompiles; no project source is touched.'; Source='Gradle default cache' }
+        [pscustomobject]@{ Id='UnityLibrary'; Section='Dev'; Label='Unity project Library folders (report only)'; Risk='REPORT'; Delete=$false; Kind='Children'; AgeDays=0;
+            Paths=@(); Impact='Per-project rebuild can take minutes to hours; select the project manually.'; Source='Not enumerated: project location is not discoverable safely' }
+    )
+}
+
+function Get-CacheEntryState {
+    param($Entry)
+    if ($Entry.Signature -and -not (Test-Path -LiteralPath $Entry.Signature)) { return 'Layout not verified on this PC' }
+    if ($Entry.RequireProcess -and @(Get-Process -Name $Entry.RequireProcess -ErrorAction SilentlyContinue).Count) { return "$($Entry.RequireProcess) is running" }
+    return ''
+}
+
+function Get-CacheEntryMeasure {
+    # Bounded read-only walk: counts, bytes, newest write and whether the walk was capped.
+    param($Entry, [int]$MaxFiles = 50000)
+    $bytes = [long]0; $files = 0; $newest = $null; $capped = $false; $roots = @()
+    foreach ($raw in @($Entry.Paths)) {
+        $path = [Environment]::ExpandEnvironmentVariables([string]$raw)
+        if (-not $path) { continue }
+        if ($path -match '\*') {
+            foreach ($f in @(Get-ChildItem -Path $path -Force -File -ErrorAction SilentlyContinue)) {
+                if ($files -ge $MaxFiles) { $capped = $true; break }
+                $files++; $bytes += $f.Length
+                if (-not $newest -or $f.LastWriteTime -gt $newest) { $newest = $f.LastWriteTime }
+            }
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) { continue }
+        if (-not (Test-CleanPathWithoutLinks $path)) { continue }
+        $roots += $path
+        foreach ($f in @(Get-CleanTreeFiles -Path $path -Report)) {
+            if ($files -ge $MaxFiles) { $capped = $true; break }
+            $files++; $bytes += $f.Length
+            if (-not $newest -or $f.LastWriteTime -gt $newest) { $newest = $f.LastWriteTime }
+        }
+    }
+    [pscustomobject]@{ Bytes=$bytes; Files=$files; Newest=$newest; Capped=$capped; Roots=@($roots); Present=($files -gt 0 -or $roots.Count -gt 0) }
+}
+
+function Show-CacheReport {
+    param([object[]]$Scan)
+    if (-not $Scan) { return }
+    foreach ($group in @('AI','Gaming','Dev')) {
+        $rows = @($Scan | Where-Object Section -eq $group)
+        if (-not $rows.Count) { continue }
+        Write-Host ''
+        Write-Host ("  {0}" -f $group.ToUpper()) -ForegroundColor Cyan
+        foreach ($row in $rows) {
+            $age = if ($row.Newest) { ('{0:N0}d' -f ((Get-Date) - $row.Newest).TotalDays) } else { '-' }
+            $size = if ($row.Present) { Format-Size $row.Bytes } else { '-' }
+            $mode = if ($row.Delete) { 'clean ' + $row.Risk } else { 'REPORT ONLY' }
+            Write-Host ("    {0,-18} {1,10} {2,7} {3,8}  {4}" -f $row.Id, $size, ($row.Files.ToString() + 'f'), $age, $mode) -ForegroundColor $(if ($row.Delete) { 'Gray' } else { 'DarkYellow' })
+            if ($row.State) { Write-Host ("      {0}" -f $row.State) -ForegroundColor DarkYellow }
+            if ($row.Capped) { Write-Host '      Scan capped; size is a lower bound.' -ForegroundColor DarkYellow }
+        }
+    }
+    Write-Host ''
+    Write-Host '  Sizes are scan estimates. Cleanup reports bytes it actually removed.' -ForegroundColor DarkGray
+}
+
+function Get-CacheScan {
+    param([object[]]$Catalog)
+    if (-not $Catalog) { $Catalog = @(Get-CacheCatalog) }
+    $scan = foreach ($entry in $Catalog) {
+        $measure = Get-CacheEntryMeasure -Entry $entry
+        [pscustomobject]@{ Id=$entry.Id; Section=$entry.Section; Label=$entry.Label; Risk=$entry.Risk; Delete=$entry.Delete; Present=$measure.Present
+            Bytes=$measure.Bytes; SizeText=(Format-Size $measure.Bytes); Files=$measure.Files; Newest=$measure.Newest; Capped=$measure.Capped; State=(Get-CacheEntryState $entry); Entry=$entry }
+    }
+    return @($scan)
+}
+
+function Export-CacheScan {
+    param([object[]]$Scan)
+    if (-not $Scan) { throw 'Scan first.' }
+    $dir = Join-Path $StateRoot 'Reports'; [void][IO.Directory]::CreateDirectory($dir)
+    $path = Join-Path $dir ('cache-scan_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.json')
+    $rows = $Scan | Select-Object Id, Section, Label, Risk, Delete, Present, Bytes, Files, Capped, State, @{n='Newest';e={ if ($_.Newest) { $_.Newest.ToString('o') } }}
+    [pscustomobject]@{ Tool='PC Cleaner'; Version=$Script:Version; Created=(Get-Date).ToString('o'); Computer=$env:COMPUTERNAME; Items=@($rows) } |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding UTF8
+    return $path
+}
+
+function Invoke-CacheClean {
+    param($Entry)
+    if (-not $Entry.Delete) { return [pscustomobject]@{ Id=$Entry.Id; Status='Skipped'; Note='Review only; kept all files.'; Removed=0; Skipped=0; Bytes=[long]0 } }
+    $state = Get-CacheEntryState $Entry
+    if ($state) { return [pscustomobject]@{ Id=$Entry.Id; Status='Skipped'; Note=$state; Removed=0; Skipped=0; Bytes=[long]0 } }
+    $category = [pscustomobject]@{ Id=$Entry.Id; Label=$Entry.Label; Kind=$Entry.Kind; Paths=$Entry.Paths; Profile='Cache'; Risk=$Entry.Risk
+        AgeDays=$Entry.AgeDays; RequireProcess=$Entry.RequireProcess; Signature=$Entry.Signature; Delete=$true }
+    return Invoke-CleanCategory -Category $category
+}
+
+function Invoke-CacheExplorer {
+    $catalog = @(Get-CacheCatalog)
+    Write-Host ''
+    Write-Host '  Scanning AI, gaming and developer caches (read-only, bounded)...' -ForegroundColor Cyan
+    $scan = @(Get-CacheScan -Catalog $catalog)
+    while ($true) {
+        Show-CacheReport -Scan $scan
+        Write-Host ''
+        Write-Host '  [1] Rescan            [2] Review every candidate' -ForegroundColor Cyan
+        Write-Host '  [3] Clean SAFE caches [4] Clean one category by id'
+        Write-Host '  [5] Export JSON report' -ForegroundColor Cyan
+        Write-Host '  [0] Back'
+        $choice = (Read-Host '  Select').Trim()
+        switch ($choice) {
+            '1' { $scan = @(Get-CacheScan -Catalog $catalog) }
+            '2' {
+                $scan | Select-Object Id, Section, Risk, Delete, Present, SizeText, Files, Capped, State | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+                 Read-Host '  Press Enter' | Out-Null }
+            '3' {
+                $targets = @($scan | Where-Object { $_.Delete -and $_.Present -and $_.Risk -eq 'SAFE' -and -not $_.State })
+                if (-not $targets.Count) { Write-Status Info 'No SAFE cache is present.'; continue }
+                Write-Host ('  About to clean: ' + (($targets | ForEach-Object Id) -join ', ')) -ForegroundColor Yellow
+                Write-Host '  Cache deletion is irreversible; the contents are downloaded or rebuilt by the app.' -ForegroundColor Yellow
+                if ((Read-Host '  Type CLEAN to continue').Trim() -ne 'CLEAN') { continue }
+                foreach ($row in $targets) {
+                    $r = Invoke-CacheClean -Entry $row.Entry
+                    $level = if ($r.Status -eq 'Completed') { 'OK' } else { 'Warn' }
+                    Write-Status $level ("{0}: {1} removed, {2} skipped, {3} bytes" -f $r.Id, $r.Removed, $r.Skipped, $r.Bytes)
+                }
+                $scan = @(Get-CacheScan -Catalog $catalog) }
+            '4' {
+                $id = (Read-Host '  Category id (see list)').Trim()
+                $row = $scan | Where-Object { $_.Id -eq $id } | Select-Object -First 1
+                if (-not $row) { Write-Status Warn 'Unknown id.'; continue }
+                if (-not $row.Delete) { Write-Status Warn ("{0} is report only: {1}" -f $row.Id, $row.Entry.Impact); continue }
+                if ($row.State) { Write-Status Warn $row.State; continue }
+                Write-Host ("  {0}: {1} - {2}" -f $row.Id, (Format-Size $row.Bytes), $row.Entry.Impact) -ForegroundColor Yellow
+                if ((Read-Host ('  Type ' + $row.Id + ' to confirm')).Trim() -ne $row.Id) { continue }
+                $r = Invoke-CacheClean -Entry $row.Entry
+                $level = if ($r.Status -eq 'Completed') { 'OK' } else { 'Warn' }
+                Write-Status $level ("{0}: {1} removed, {2} skipped, {3} bytes" -f $r.Id, $r.Removed, $r.Skipped, $r.Bytes)
+                $scan = @(Get-CacheScan -Catalog $catalog) }
+            '5' { $path = Export-CacheScan -Scan $scan; Write-Status OK ("Report written: {0}" -f $path) }
+            '0' { return }
+            default { Write-Status Warn 'Invalid selection.' }
+        }
+    }
+}
+
+# ============================================================================
 #  MENU / ENTRY
 # ============================================================================
 
@@ -881,6 +1102,7 @@ function Show-Menu {
     Write-Host '  [5] Registry Care (orphaned entries; backups included)' -ForegroundColor Cyan
     Write-Host '  [6] Empty the Recycle Bin'
     Write-Host '  [7] Restore latest registry backup' -ForegroundColor Yellow
+    Write-Host '  [8] Cache Explorer (AI, gaming, dev caches - read-only scan)' -ForegroundColor Cyan
     Write-Host '  [0] Exit'
     Write-Host ''
 }
@@ -904,6 +1126,7 @@ switch ($Action) {
                     '5' { Invoke-RegistryCare; Read-Host '  Press Enter to continue' | Out-Null }
                     '6' { Invoke-RecycleBin; Read-Host '  Press Enter to continue' | Out-Null }
                     '7' { Restore-LatestRegistryBackup; Read-Host '  Press Enter to continue' | Out-Null }
+                    '8' { Invoke-CacheExplorer; Read-Host '  Press Enter to continue' | Out-Null }
                     '0' { exit 0 }
                     default { Write-Status Warn 'Invalid selection.' }
                 }
