@@ -1,5 +1,11 @@
 # Changelog
 
+## Toolkit 3.1.3 (2026-11-07)
+
+- Legacy optimizer repair no longer forces SysMain startup or turns on RSS/RSC for each adapter. A cleanup removes the v3.x overrides it can identify, reports the current SysMain state and leaves adapter offloads at the driver setting, because the value before the old tweak was never recorded. MMCSS Games values are written only when they differ from Microsoft's documented defaults, and the snapshot taken first still restores a custom setup.
+- The OneDrive gate treats a missing Explorer `Shell Folders` cache entry as unverified instead of assuming the folder is local, so the lock and uninstall actions stay blocked until Explorer has written that cache.
+- Encrypted DNS reports the exact snapshot it created: `Set-Provider` and `Reset-Dhcp` return the path, the dashboard stores that path for undo, and standalone DNS changes take the shared operation mutex so a console and the dashboard cannot mutate DNS at the same moment.
+
 ## Toolkit 3.1.2 (2026-11-07)
 
 - Name the OneDrive, startup, app, recovery and service grids, the adapter and DNS provider selectors, and the result log for screen readers. Buttons already expose their visible text; these controls were announced only by type.

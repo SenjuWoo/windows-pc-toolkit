@@ -4,7 +4,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference='Stop'
 $script:SuiteRoot=Split-Path $PSScriptRoot -Parent
 $script:SuiteDataRoot=$DataRoot
-$script:SuiteVersion='3.1.2'
+$script:SuiteVersion='3.1.3'
 
 function Write-SuiteDiagnostic {
     param([string]$Operation,[string]$Message,[string]$Level='Debug',[string]$RunId)
@@ -901,8 +901,8 @@ function Get-SuiteOneDriveReport {
         $cloud=[pscustomobject]@{Count=0;Capped=$false;Incomplete=$false}
         if ($CountCloudOnly -and $userClass -eq 'OneDrive' -and $location) { $cloud=Get-SuiteCloudOnlyCount -Path $location -Limit $CloudLimit }
         $status=switch ($userClass) {
-            'Local' { if ($shellClass -eq 'OneDrive') { 'Explorer cache still points at OneDrive' } elseif ($shellClass -eq 'Unknown') { 'Explorer cache location not verified' } else { 'On this PC' } }
-            'Custom' { if ($shellClass -eq 'OneDrive') { 'Explorer cache still points at OneDrive' } elseif ($shellClass -eq 'Unknown') { 'Explorer cache location not verified' } else { 'On this PC (custom folder)' } }
+            'Local' { if ($shellClass -eq 'OneDrive') { 'Explorer cache still points at OneDrive' } elseif ($shellClass -in @('Unknown','Missing')) { 'Explorer cache location not verified' } else { 'On this PC' } }
+            'Custom' { if ($shellClass -eq 'OneDrive') { 'Explorer cache still points at OneDrive' } elseif ($shellClass -in @('Unknown','Missing')) { 'Explorer cache location not verified' } else { 'On this PC (custom folder)' } }
             'OneDrive' { 'Still in OneDrive' }
             'Missing' { 'Not recorded' }
             default { 'Location not verified' }
@@ -913,6 +913,7 @@ function Get-SuiteOneDriveReport {
         if ($cloud.Count -gt 0) { $note="$($cloud.Count) online-only file(s). Right-click the folder and choose Always keep on this device, then turn backup off again." }
         if ($cloud.Capped) { $note=($note+' Scan stopped after the file limit.').Trim() }
         elseif ($cloud.Incomplete) { $note=($note+' Scan incomplete: linked, virtual or inaccessible locations were not followed. A zero count does not prove files are downloaded.').Trim() }
+        if ($shellClass -eq 'Missing') { $note=($note+' No Explorer cache entry was recorded; open File Explorer once, then refresh.').Trim() }
         if ($aliasNotes.Count) { $note=($note+' '+($aliasNotes -join '; ')).Trim() }
         [void]$folders.Add([pscustomobject]@{
             Folder=$known.Folder; ValueName=$known.ValueName; Location=$location; Status=$status; Note=$note
@@ -920,7 +921,7 @@ function Get-SuiteOneDriveReport {
         })
     }
     $redirected=@($folders | Where-Object { $_.UserClass -eq 'OneDrive' -or $_.ShellClass -eq 'OneDrive' -or $_.AliasClasses -contains 'OneDrive' })
-    $uncertain=@($folders | Where-Object { $_.UserClass -in @('Missing','Unknown') -or $_.ShellClass -eq 'Unknown' -or @($_.AliasClasses | Where-Object { $_ -in @('Missing','Unknown') }).Count })
+    $uncertain=@($folders | Where-Object { $_.UserClass -in @('Missing','Unknown') -or $_.ShellClass -in @('Unknown','Missing') -or @($_.AliasClasses | Where-Object { $_ -in @('Missing','Unknown') }).Count })
     $optOut=$false; $silent=$false; $wizard=$false; $locked=$false
     if (Test-Path -LiteralPath $PolicyKey) {
         $optOutState=Get-RegistryValueState -Path $PolicyKey -Name 'KFMBlockOptOut'
@@ -934,7 +935,7 @@ function Get-SuiteOneDriveReport {
     }
     $policyBlock=''
     if ($redirected.Count) { $policyBlock='Still pointing at OneDrive: '+((@($redirected.Folder) | Select-Object -Unique) -join ', ')+'. Before uninstalling, use OneDrive Settings > Sync and backup > Manage backup. Stop backup for each affected folder and choose Only on my PC. Download online-only files first if prompted. If OneDrive is already removed, open Recovery instructions. Nothing was changed.' }
-    elseif ($uncertain.Count) { $policyBlock='Windows folder locations could not be verified: '+(@($uncertain.Folder) -join ', ')+'. Check for missing folders, invalid paths, unavailable drives or links. Nothing was changed.' }
+    elseif ($uncertain.Count) { $policyBlock='Windows folder locations could not be verified: '+(@($uncertain.Folder) -join ', ')+'. Check for missing folders, invalid paths, unavailable drives, links or an absent Explorer folder cache. Nothing was changed.' }
     elseif ($optOut) { $policyBlock='Policy KFMBlockOptOut is forcing known folders to stay in OneDrive, so the backup toggles cannot move them back. Nothing was changed.' }
     elseif ($silent -or $wizard) { $policyBlock='Policy KFMSilentOptIn or KFMOptInWithWizard is set to move folders into OneDrive. Microsoft says the local lock does not apply while that policy is on. Nothing was changed.' }
     $policyAllowed=[string]::IsNullOrEmpty($policyBlock)

@@ -329,6 +329,30 @@ try {
         Check ($script:Rollback -eq 1) 'DHCP reset verification failure attempts prior-state rollback'
         Set-Content -LiteralPath (Join-Path $StateRoot 'current_provider.json') -Value '{broken' -Encoding UTF8
         Expect-Failure { New-DnsSnapshot } '*' 'Unreadable current-provider state aborts the DNS snapshot'
+
+        # A DNS change must hand back the exact snapshot it created, and two live operations
+        # must not mutate DNS at once (the dashboard and a console share one mutex).
+        $ownSnapshot=Join-Path $fixture 'dns-own-snapshot.json'
+        function Set-ProviderCore { param($Key) $script:DnsSnapshotForUndo=$ownSnapshot }
+        $own=Set-Provider -Key 'Quad9'
+        Check ($own -ceq $ownSnapshot) 'Set-Provider returns the exact snapshot it created'
+        function Reset-DhcpCore { param() $script:DnsSnapshotForUndo=$ownSnapshot }
+        $ownReset=Reset-Dhcp
+        Check ($ownReset -ceq $ownSnapshot) 'Reset-Dhcp returns the exact snapshot it created'
+
+        $held=Join-Path $fixture 'mutex-held.flag'
+        $mutexName='Global\WindowsPCToolkit.SafeOperation'
+        $holder=[powershell]::Create()
+        [void]$holder.AddScript('$m=[Threading.Mutex]::new($false,"'+$mutexName+'");$null=$m.WaitOne(10000);[IO.File]::WriteAllText("'+$held+'","held");Start-Sleep -Seconds 3;$m.ReleaseMutex();$m.Dispose()')
+        $async=$holder.BeginInvoke()
+        $deadline=(Get-Date).AddSeconds(5)
+        while (-not (Test-Path -LiteralPath $held) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
+        Check (Test-Path -LiteralPath $held) 'Fixture thread holds the shared operation mutex'
+        Expect-Failure { Enter-DnsOperation | Out-Null } '*Another toolkit operation*' 'DNS work is refused while another operation holds the mutex'
+        $holder.EndInvoke($async); $holder.Dispose()
+        $free=Enter-DnsOperation
+        Check ($free -is [Threading.Mutex]) 'DNS lock is available once the other operation ends'
+        $free.ReleaseMutex(); $free.Dispose()
     }
     Write-Host "DNS/privacy audit checks passed: $script:Checks"
 } finally {

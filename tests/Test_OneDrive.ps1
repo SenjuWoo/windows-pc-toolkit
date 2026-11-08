@@ -50,6 +50,15 @@ try {
     Check ($local.PolicyAllowed -and -not $local.UninstallAllowed -and -not $local.RestoreAllowed) 'Local folders with no OneDrive app can be locked and are not a restore'
     Check (@($local.Folders | Where-Object Status -eq 'On this PC').Count -eq 5) 'All five folders report On this PC'
 
+    # A missing Explorer cache value proves nothing about the folder: treat it as unverified
+    # instead of letting a partially written shell cache pass the safety gate.
+    Remove-ItemProperty -LiteralPath $shellKey -Name 'Personal' -ErrorAction SilentlyContinue
+    $cacheGap=Get-FixtureReport ''
+    Check (-not $cacheGap.PolicyAllowed -and -not $cacheGap.UninstallAllowed -and -not $cacheGap.RestoreAllowed) 'Missing Explorer cache entry blocks lock, uninstall and restore'
+    Check (@($cacheGap.Folders | Where-Object { $_.Folder -eq 'Documents' -and $_.Status -match 'not verified' }).Count -eq 1) 'Missing cache entry is reported as unverified for that folder'
+    Check ([bool]($cacheGap.Folders | Where-Object Folder -eq 'Documents' | Select-Object -ExpandProperty Note | Where-Object { $_ -match 'Explorer cache' })) 'Unverified cache row explains how to rebuild it'
+    Set-RegValue $shellKey 'Personal' (Join-Path $profile 'Documents') 'String'
+
     $documents=Join-Path $profile 'OneDrive\Documents'
     [void][IO.Directory]::CreateDirectory($documents)
     $kept=Join-Path $documents 'keep.txt'
