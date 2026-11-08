@@ -1,5 +1,13 @@
 # Changelog
 
+## Toolkit 3.3.0 (2026-11-07)
+
+- Cache Explorer fixes: a wildcard directory pattern (Epic style) is measured as directories instead of as files, so the scan no longer reports zero bytes for a cache it would clean; the scan enumerates depth-first and stops at the cap instead of materialising the whole tree; age rules are applied to each file immediately before deletion, so a fresh file inside an old folder survives and the estimate matches the bytes removed; the scan shows eligible bytes next to total found, unique report names, and a detail view with every path, source and rebuild impact.
+- Steam discovery reads the registry and every `libraryfolders.vdf` entry and validates each root as a local fixed drive. VRChat honours a configured local `cache_directory`. Steam staging temp and the Epic webcache folder are now report-only: staging can hold an unfinished update, and the browser `WebCache` guard also covers Epic's folder name.
+- Gradle and Unreal caches require their editor or JVM to be closed.
+- `PC_Cleaner.ps1` is 943 lines again: the catalog, scanner and explorer live in `CacheExplorer.ps1`, and the new Skyrim cleaner in `SkyrimCleanup.ps1`.
+- New Skyrim & Modding Cleanup (menu `[9]`): SKSE and Papyrus diagnostic logs under the Windows Documents known folder for Skyrim SE/AE and Skyrim VR, SAFE (older than 7 days) or HARD (any age, game and tools closed). Only `.log`/`.logN` files are eligible; saves, `.ini`, `.json`, `.toml`, `.yaml`, `.dll`, `.pex`, `.psc` and unknown types stay, including inside the SKSE folder. This is the single approved Documents exception, revalidated per file: approved root, direct child, log pattern, no link in any parent, regular file. Cloud-synced Documents folders are report-only, and MO2/Vortex data folders are measured without deletion.
+
 ## Toolkit 3.2.0 (2026-11-07)
 
 - PC Cleaner 1.2.0 adds a Cache Explorer (menu `[8]`) for AI, gaming and developer caches. It scans read-only, names the source and rebuild cost of every category, exports a JSON report, and deletes only after a typed confirmation.

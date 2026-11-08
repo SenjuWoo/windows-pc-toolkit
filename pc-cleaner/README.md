@@ -1,4 +1,4 @@
-# PC Cleaner 1.2.0
+# PC Cleaner 1.3.0
 
 Scan-first cleanup and targeted registry repair. Use the [dashboard](../README.md) or `Run_As_Admin.bat` for the detailed console. Extract the complete toolkit; registry care uses shared root `Modules`.
 
@@ -34,6 +34,17 @@ Menu `[8]` in the console opens a read-only scan of caches that are usually safe
 Every row carries its source and rebuild impact. **Clean SAFE caches** only offers SAFE rows whose layout is verified and whose app is closed; STRICT and CAREFUL rows need the category id typed back. **Export JSON report** writes the measurement, not a promise of reclaimed space.
 
 The scan is bounded (50,000 files per category) so a large library cannot freeze the console. Sizes are estimates; each cleanup reports the bytes it actually removed, plus skipped files.
+
+## Skyrim & Modding Cleanup (1.3.0, menu `[9]`)
+
+Resolves the Windows Documents known folder and searches only `My Games\Skyrim Special Edition` and `My Games\Skyrim VR`:
+
+| Source | Files | Level |
+| --- | --- | --- |
+| `SKSE` | `.log` / `.logN` from SKSE and plugins | SAFE (older than 7 days) or HARD (any age) |
+| `Logs\Script` | `Papyrus*.log` rotations | SAFE or HARD |
+
+Only those extensions are eligible. Saves, `.ini`, `.json`, `.toml`, `.yaml`, `.dll`, `.pex`, `.psc`, archives and unknown types stay. This is the one approved bypass of the `Documents` guard: the file must be a direct child of an approved game-log folder, match the log pattern, be regular and have no reparse point in any parent — rechecked immediately before deletion. Cloud-synced Documents folders and Mod Organizer 2 / Vortex data folders are report-only.
 
 ## Guards
 
