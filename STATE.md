@@ -4,15 +4,24 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.4.2 is published and delivered.** Release commit `9750079b6d13c5c4aa924e65114e51bceaccdec6`, annotated tag `v3.4.2`, published 2026-11-08. Payload re-downloaded, matched blob for blob and tested after extraction (779 assertions). Delivered copy `Windows-PC-Toolkit-3.4.2`, 80 files.
+**3.4.3 is published and delivered.** Release commit `993166699b91c6ef76b298eee9537bbfe7b12228`, annotated tag `v3.4.3`, published 2026-11-08. Assets re-downloaded and matched, payload verified blob for blob against that commit, extracted into `Windows-PC-Toolkit-3.4.3` and the full suite re-run there (785 assertions). 81 files.
 
 ## Published release, verified 2026-11-08
 
-- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.2 - tag resolves to `9750079b6d13c5c4aa924e65114e51bceaccdec6`.
-- CI `42517312167`, push `42517311949`; all checks success on that SHA. PR #28 merged.
-- Alerts 0/0/0; Code Quality unavailable.
-- `Windows-PC-Toolkit-3.4.2.zip` - 415,686 bytes, SHA-256 `4fd2ffdfffc9af50ec5e5bcce981d0414717684180a436e12f94e68ed99d0efb`, 80 files, 0 raw mismatches. Provenance `47b901dbbd6dc2cd41192a0f3006b731f900874571cbbd3ce42affc4cb22a35d`; SHA256SUMS `61ebb3e096b8b85f1d0ea69e5074ba3de96c063a0728df3530a95cea901ca556`.
-- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.2`: smoke passes (66 controls, 20 choices).
+- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.3 - tag resolves to `993166699b91c6ef76b298eee9537bbfe7b12228`, not draft, not prerelease.
+- Required checks on that SHA: Analyze (actions), Analyze (python), JSON + Python validation, PowerShell + native Windows regression checks - all success. Workflow runs CI `42518857189` and Push on main `42518857318` success.
+- Alerts: Dependabot 0, code-scanning 0, secret-scanning 0. Code Quality is unavailable on this repository and is not claimed.
+- `Windows-PC-Toolkit-3.4.3.zip` - 417,846 bytes, SHA-256 `eb96bf87be2daa7e2c01ddda96f9af038c12a11c8bde039300f2b7a48c833968`, 81 payload files, 0 raw blob mismatches. Provenance `79f42bef4ac2249cbcd1195a91a8fe24a4d3539837f72861bb26059acf8f5df7`; SHA256SUMS `895008e8670074b9576dff05e91dcb693e28e53b5027a4a920db6cfeb96078a9`.
+- Re-downloaded assets: all three hashes match the published digests. Verified again with `build_release.py verify` against the release commit: 0 mismatches.
+- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.3`: 785 assertions, eleven suites, exit 0; `Validate_All.ps1` passes; smoke loads 66 controls and 20 choices.
+- README download and release-notes links return HTTP 200 and name v3.4.3.
+
+## What 3.4.3 changed
+
+- A literal catalog cache path that became a regular file is refused with "Expected a cache folder, found a file"; the root policy is checked before the file/folder split, so a cache root cannot bypass validation by changing type. Wildcard rows still delete what their pattern matches.
+- Measurement applies the same rule, so such a file is never advertised as reclaimable.
+- `README.md` links follow the shipped version, and `Validate_All.ps1` fails when any README link or ZIP name disagrees with `SuiteVersion`.
+- Tests: 785 assertions; cache explorer 91.
 
 ## What 3.4.2 changed
 
