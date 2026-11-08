@@ -4,19 +4,27 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.1.4 is published and delivered.** Release commit `09160b57c2f454986d94750cbbc55ba8f64a96cc`, annotated tag `v3.1.4` (tag object `657cf3a823958fc6245749a571ec6df3ec6d3b89`), published 2026-11-07. The payload was downloaded again, matched to that commit blob for blob, and tested after extraction. Portable copies of 3.1.2, 3.1.3 and 3.1.4 are extracted in the workspace; 3.0.2 and 3.1.1 are gone. All previous releases remain on GitHub.
+**3.2.0 is published and delivered.** Release commit `f18a56e5864a06411c70b24eea2d2eb62b6a4b2d`, annotated tag `v3.2.0` (tag object `b3be36919386538d2745227ddc19e0c830a54436`), published 2026-11-07. Payload re-downloaded, matched to that commit blob for blob and tested after extraction. Portable copies of 3.1.2 through 3.2.0 are in the workspace; 3.0.2 and 3.1.1 are gone.
 
 ## Published release, verified 2026-11-07
 
-- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.1.4 - not a draft, not a prerelease, tag resolves to `09160b57c2f454986d94750cbbc55ba8f64a96cc`.
-- CI run `42447397926` and CodeQL analysis run `42447397523` are terminal-success on that exact SHA. PR `#17` checks: PowerShell/native, JSON+Python, CodeQL and Analyze (actions) all pass.
-- Alerts before publication: Dependabot 0, code-scanning 0, secret-scanning 0 open. Code Quality remains unavailable and stays off.
+- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.2.0 - not a draft, not a prerelease, tag resolves to `f18a56e5864a06411c70b24eea2d2eb62b6a4b2d`.
+- CI run `42457624683` and CodeQL analysis run `42457624820` are terminal-success on that exact SHA. PR `#19` checks all pass, including the friendly installed layout.
+- Alerts: Dependabot 0, code-scanning 0, secret-scanning 0. Code Quality unavailable and off.
 - Assets, freshly downloaded and hashed:
-  - `Windows-PC-Toolkit-3.1.4.zip` - 380,862 bytes, SHA-256 `6609a85ac4683e74aced783c6d761a94f36152bc04cb6ccf3f6fd8f7c99d0b4c`, 73 payload files.
-  - `release-provenance.json` - 1,452 bytes, SHA-256 `56ea2009f269a6b7eefd6ea498b9cc9c37199f0665e20b6d1005802cb10f1426`.
-  - `SHA256SUMS.txt` - 185 bytes, SHA-256 `706d6e03e7b25bc2d424a37b8593c78a08b0b8345424b9ad14b9751ba0d4ac6b`.
-  - All three match `SHA256SUMS.txt` and GitHub's recorded asset digests.
-- Byte proof: all 73 payload files equal the raw Git blob at `09160b5` - 0 raw mismatches, 0 newline-normalized mismatches. Report `.artifacts/verify-3.1.4/verify-downloaded.json`.
+  - `Windows-PC-Toolkit-3.2.0.zip` - 389,964 bytes, SHA-256 `f290f25baceaf3679adeaca8d7d146b984be0591157ac5ab33159573e78226d3`, 74 payload files.
+  - `release-provenance.json` - SHA-256 `181985ba8a63372da13fd19f949817dfd300f9b07e953484d5628a455739ad62`.
+  - `SHA256SUMS.txt` - SHA-256 `8e9e1dc20c1ca07a2e5063f9098730692f6dbcf50b8b8f083e0afd0bac49c2dd`.
+  - All three match `SHA256SUMS.txt` and GitHub's recorded digests; 0 raw mismatches against the commit.
+- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.2.0`: 74 files, `-SmokeTest` passes.
+
+## What 3.2.0 adds
+
+- PC Cleaner 1.2.0 Cache Explorer on menu `[8]`: read-only bounded scan of 16 catalog categories (12 deletable, 4 report-only) for AI, gaming and developer caches, with per-row source, risk, age, rebuild cost, JSON export and typed confirmation before deletion.
+- Deletable categories: Antigravity caches (signature-gated), Steam shadercache/temp per library, VRChat Cache-WindowsPlayer, Epic webcache, Roblox/Minecraft aged logs, pip/npm/NuGet, Unreal DDC, Gradle.
+- Report-only: Codex, Claude and Hermes homes, Unity project libraries.
+- Four new gates on the existing choke point: Delete=false refuses, signature folder required, running app blocks, protected folder inside a cache root refuses the whole root. `AgeDays` rechecked per item.
+- `tests/Test_CacheExplorer.ps1`: 30 fixture checks. Native suite 689 assertions in ten suites.
 
 ## What 3.1.4 fixes
 
@@ -34,14 +42,13 @@ Deliver a safe, usable native Windows toolkit for fresh installs and existing PC
 ## Verified this session (2026-11-07)
 
 - Static validation passes for 46 PowerShell files, including the version-sync and accessible-name gates.
-- Source checkout: **659** native assertions across nine suites - OneDrive 45, base 117, Suite 62, Cleaner 57, DNS/privacy 104, repair/gaming 49, launchers 125, final gaming 35, final Fixer 65. Log `.artifacts/verify-3.1.4/local-tests.log`; zero failures.
-- Extracted published payload (tests and validator copied in only for QA): the same 659 assertions pass. Log `.artifacts/verify-3.1.4/package-tests.log`. Payload smoke test reports `66 controls, 20 optimization choices`; `Toolkit.Run.ps1 -Preview` runs.
+- Source checkout: **689** native assertions across ten suites - OneDrive 45, base 117, Suite 62, Cleaner 57, Cache Explorer 30, DNS/privacy 104, repair/gaming 49, launchers 125, final gaming 35, final Fixer 65. Log `.artifacts/verify-3.2.0/local-tests.log`; zero failures.
+- Extracted published payload (tests and validator copied in only for QA): the same 689 assertions pass. Log `.artifacts/verify-3.2.0/package-tests.log`. Payload smoke test reports `66 controls, 20 optimization choices`; `Toolkit.Run.ps1 -Preview` runs.
 - New regressions: custom MMCSS value reset and matching value untouched, no service or adapter mutation during a cleanup, missing shell cache blocks the gate, exact snapshot path returned by both DNS entry points, real second-thread mutex refusal with recovery after release.
-- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.1.4`: 73 files, hashes match the published ZIP, `-SmokeTest` passes.
 
 ## First unfinished step
 
-Nothing blocks the 3.1.4 handoff. Optional follow-ups, in priority order:
+Nothing blocks the 3.2.0 handoff. Optional follow-ups, in priority order:
 
 1. Live end-to-end proof on a disposable VM or spare account: real OneDrive backup stop, uninstall and app-level path recovery, plus a gaming-profile apply and undo. Everything today is fixture and read-only evidence.
 2. Backlog from the 2026-10-31 blueprint review (`docs/specs/2026-10-31-blueprint-review.md`): DISM failure cause hints, a read-only BitLocker/WinRE card, Explorer window restore around the icon-cache rebuild, tiered AI controls, startup baseline diff.
@@ -70,6 +77,6 @@ No live optimization, debloat, OneDrive uninstall, shell-folder migration, DNS c
 
 ## Last known good and preservation
 
-- Current: `Windows-PC-Toolkit-3.1.4` (73 files, matches the published ZIP). 3.1.2 and 3.1.3 remain on disk; 3.0.2 and 3.1.1 are absent and were not re-created; every release remains downloadable from GitHub. Do not edit an extracted copy.
+- Current: `Windows-PC-Toolkit-3.2.0` (74 files, matches the published ZIP). 3.1.2, 3.1.3 and 3.1.4 remain on disk; 3.0.2 and 3.1.1 are absent and were not re-created; every release remains downloadable from GitHub. Do not edit an extracted copy.
 - Prior public releases remain at https://github.com/SenjuWoo/windows-pc-toolkit/releases .
-- Changelog: `CHANGELOG.md`. Release note source: `docs/releases/v3.1.4.md`. Release steps: `docs/RELEASING.md`.
+- Changelog: `CHANGELOG.md`. Release note source: `docs/releases/v3.2.0.md`. Release steps: `docs/RELEASING.md`.
