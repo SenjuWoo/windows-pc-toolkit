@@ -179,7 +179,7 @@ try {
         $script:CleanerDebugEnabled=$true
         Write-CleanerDiagnostic 'Startup' "Action=Fixture; StateRoot=$StateRoot"
         $debug=Join-Path $env:LOCALAPPDATA 'WindowsPCToolkit\Logs\Cleaner_debug.log'
-        Check ((Get-Content -LiteralPath $debug -Raw) -match 'v1\.4\.2 Startup: Action=Fixture; StateRoot=') 'Enabled diagnostic records version and resolved configuration'
+        Check ((Get-Content -LiteralPath $debug -Raw) -match 'v1\.4\.3 Startup: Action=Fixture; StateRoot=') 'Enabled diagnostic records version and resolved configuration'
         [IO.File]::WriteAllBytes($debug,(New-Object byte[] 1048576))
         Write-CleanerDiagnostic 'Failure' 'fixture cause'
         Check ((Test-Path -LiteralPath ($debug+'.1')) -and (Get-Item -LiteralPath $debug).Length -lt 1MB) 'Diagnostic output rotates at one MiB'

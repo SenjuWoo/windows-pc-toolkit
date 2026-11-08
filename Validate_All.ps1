@@ -130,6 +130,17 @@ else{
     $firstHeading=[regex]::Match((Get-Content -LiteralPath (Join-Path $root 'CHANGELOG.md') -Raw),'(?m)^##\s+Toolkit\s+([0-9]+\.[0-9]+\.[0-9]+)')
     if(-not $firstHeading.Success -or $firstHeading.Groups[1].Value -ne $version){$failed=$true;Write-Host "[FAIL] CHANGELOG top entry is not $version." -ForegroundColor Red}
 }
+# A download link that points at an older release is a broken promise to the user, so the
+# advertised version, the ZIP it names and the release-notes URL must all be the shipped one.
+$readmeText=Get-Content -LiteralPath (Join-Path $root 'README.md') -Raw
+foreach($link in [regex]::Matches($readmeText,'releases/(?:download|tag)/v([0-9]+\.[0-9]+\.[0-9]+)')) {
+    if($link.Groups[1].Value -ne $version){$failed=$true;Write-Host "[FAIL] README links to v$($link.Groups[1].Value), not v$version." -ForegroundColor Red}
+}
+foreach($zip in [regex]::Matches($readmeText,'Windows-PC-Toolkit-([0-9]+\.[0-9]+\.[0-9]+)\.zip')) {
+    if($zip.Groups[1].Value -ne $version){$failed=$true;Write-Host "[FAIL] README names Windows-PC-Toolkit-$($zip.Groups[1].Value).zip, not $version." -ForegroundColor Red}
+}
+if($readmeText -notmatch [regex]::Escape("releases/tag/v$version")){$failed=$true;Write-Host "[FAIL] README has no release-notes link for v$version." -ForegroundColor Red}
+
 # Screen readers need a name for controls whose value is not self-describing. Buttons
 # already expose their Content text, so only grids, combo boxes and the result log need one.
 [xml]$markup=Get-Content -LiteralPath (Join-Path $root 'Toolkit.xaml') -Raw
