@@ -4,15 +4,23 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.4.0 is published and delivered.** Release commit `f6be319782b7cbdeda7af7832e7bdb68b94f3b21`, annotated tag `v3.4.0` (tag object `347678a12e9f2c51f1632bf2636355aa57a6df95`), published 2026-11-08. Payload re-downloaded, matched to that commit blob for blob and tested after extraction (743 assertions). Delivered copy `Windows-PC-Toolkit-3.4.0`, 78 files.
+**3.4.1 is published and delivered.** Release commit `8e304993bf0905e33598c4c6be3de0b83fe645d0`, annotated tag `v3.4.1`, published 2026-11-08. Payload re-downloaded, matched blob for blob and tested after extraction (770 assertions). Delivered copy `Windows-PC-Toolkit-3.4.1`, 79 files.
 
 ## Published release, verified 2026-11-08
 
-- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.0 - tag resolves to `f6be319782b7cbdeda7af7832e7bdb68b94f3b21`.
-- CI `42511843237`, push `42511843268`; all four checks success on that SHA. PR #24 merged.
+- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.1 - tag resolves to `8e304993bf0905e33598c4c6be3de0b83fe645d0`.
+- CI `42515070922`, push `42515070199`; all checks success on that SHA. PR #26 merged.
 - Alerts 0/0/0; Code Quality unavailable.
-- `Windows-PC-Toolkit-3.4.0.zip` - 407,753 bytes, SHA-256 `fe7f2164e010c793763cd1f6d7d3ce92c28a4b21b91f66403b7c04e566ca6ee3`, 78 files, 0 raw mismatches. Provenance `9c2d50bc0475bbdfeca3837fcad53765e7fcea7c6de94e4212965fcabfebaed1`; SHA256SUMS `2107c0f5815de68e473b2b051b74356269dc12ac74baa53ab5ef00fea3017a71`.
-- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.0`: smoke passes.
+- `Windows-PC-Toolkit-3.4.1.zip` - 413,202 bytes, SHA-256 `ed2b423a0b745eae9bb634226d5df46f03a93a247be760b61ae5162bd8859c24`, 79 files, 0 raw mismatches. Provenance `835c18f397ec06518b9e8fedf3b2ebb25e19975f907f98fb7acae3b0489acbf9`; SHA256SUMS `d2f3d9e8e81c808e1c597dafc109b62f37d632d50d2cb8e56341192686312920`.
+- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.1`: smoke passes (66 controls, 20 choices).
+
+## What 3.4.1 changed
+
+- Steam shader cache is cleanable through a policy that accepts exactly the folders Steam reports live; the Program Files guard is unchanged for everything else.
+- VRChat cache freshness fails closed on absent, unreadable or moved configuration.
+- Portable MO2 detection with identity verification; MO2/Vortex/DynDOLOD logs gated by their owning process at scan, at clean and before each file; Skyrim VR checks `sksevr_loader`.
+- Catalog 22 categories: 13 deletable, 9 report-only. Codex catalog cache and Claude shell snapshots are measured and kept.
+- Tests: 770 assertions (76 cache explorer, 35 Skyrim).
 
 ## What 3.4.0 changed
 
