@@ -219,12 +219,15 @@ function Resolve-CacheTargets {
             $cut = $path.LastIndexOf([IO.Path]::DirectorySeparatorChar, $star)
             $patternPath = if ($cut -ge 0) { ([WildcardPattern]::Escape($path.Substring(0, $cut + 1))) + $path.Substring($cut + 1) } else { $path }
             foreach ($item in @(Get-Item -Path $patternPath -Force -ErrorAction SilentlyContinue)) {
-                [pscustomobject]@{ Path = $item.FullName; IsContainer = [bool]$item.PSIsContainer }
+                # A wildcard is a real pattern: whatever it matches keeps its own type.
+                [pscustomobject]@{ Path = $item.FullName; IsContainer = [bool]$item.PSIsContainer; Expected = 'Any' }
             }
-        } elseif (Test-Path -LiteralPath $path -PathType Container) {
-            [pscustomobject]@{ Path = $path; IsContainer = $true }
-        } elseif (Test-Path -LiteralPath $path -PathType Leaf) {
-            [pscustomobject]@{ Path = $path; IsContainer = $false }
+        } elseif (Test-Path -LiteralPath $path) {
+            # A literal catalog path always describes a folder. If it is a file now, the layout
+            # changed and the row must not fall through to a plain file delete. A path that does
+            # not exist yields no target, exactly as before.
+            $isDir = [bool](Test-Path -LiteralPath $path -PathType Container)
+            [pscustomobject]@{ Path = $path; IsContainer = $isDir; Expected = 'Directory' }
         }
     }
     return @($targets)
@@ -285,6 +288,8 @@ function Get-CacheEntryMeasure {
     foreach ($target in $targets) {
         $roots = if ($target.IsContainer) { @($target.Path) } else { @() }
         if (-not $target.IsContainer) {
+            # A literal path promised a folder; a file there is a layout change, not a cache file.
+            if ($target.Expected -eq 'Directory') { continue }
             if ((Test-IsProtectedPath $target.Path) -or -not (Test-CleanPathWithoutLinks $target.Path)) { continue }
             $file = Get-Item -LiteralPath $target.Path -Force -ErrorAction SilentlyContinue
             if ($file) {
@@ -295,6 +300,7 @@ function Get-CacheEntryMeasure {
             continue
         }
         # A row the deletion guard would refuse must not be measured as cleanable either.
+        if ($target.Expected -eq 'Directory' -and -not $target.IsContainer) { continue }
         if (-not (Test-CleanPathWithoutLinks $target.Path)) { continue }
         if ($Entry.RootPolicy) {
             $policyVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $Entry.RootPolicy -SteamRoots $Entry.SteamRoots
@@ -412,6 +418,25 @@ function Invoke-CacheClean {
     if ($state) { $result.Status = 'Skipped'; $result.Note = $state; return $result }
     $cutoff = if ($Entry.AgeDays) { (Get-Date).AddDays(-[double]$Entry.AgeDays) } else { $null }
     foreach ($target in @(Resolve-CacheTargets $Entry)) {
+        $liveSteamRoots = if ($SteamRoots) { @($SteamRoots) } elseif ($Entry.RootPolicy -eq 'SteamShader') { @(Get-SteamLibraryRoots) } else { $null }
+        if ($Entry.RootPolicy) {
+            # The root policy is checked before anything else and regardless of type, so a cache
+            # folder that became a file cannot bypass it through the plain-file branch below.
+            $policyVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $Entry.RootPolicy -SteamRoots $liveSteamRoots
+            if (-not $policyVerdict.Ok) {
+                $result.Skipped++
+                $result.Note = 'Cache location refused: ' + $policyVerdict.Reason
+                if ($result.Removed -eq 0) { $result.Status = 'Skipped' }
+                continue
+            }
+        }
+        if ($target.Expected -eq 'Directory' -and -not $target.IsContainer) {
+            # A literal path promised a folder. A file here is not the cache we scanned.
+            $result.Skipped++
+            $result.Note = 'Expected a cache folder, found a file; kept it.'
+            if ($result.Removed -eq 0) { $result.Status = 'Skipped' }
+            continue
+        }
         if (-not $target.IsContainer) {
             $file = Get-Item -LiteralPath $target.Path -Force -ErrorAction SilentlyContinue
             if (-not $file) { continue }
@@ -420,13 +445,14 @@ function Invoke-CacheClean {
             else { $result.Skipped++ }
             continue
         }
-        $liveSteamRoots = if ($SteamRoots) { @($SteamRoots) } elseif ($Entry.RootPolicy -eq 'SteamShader') { @(Get-SteamLibraryRoots) } else { $null }
-        $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy $(if ($Entry.RootPolicy) { $Entry.RootPolicy } else { 'Generic' }) -SteamRoots $liveSteamRoots
-        if (-not $rootVerdict.Ok) {
-            $result.Skipped++
-            $result.Note = 'Cache location refused: ' + $rootVerdict.Reason
-            if ($result.Removed -eq 0) { $result.Status = 'Skipped' }
-            continue
+        if (-not $Entry.RootPolicy) {
+            $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName -Policy 'Generic'
+            if (-not $rootVerdict.Ok) {
+                $result.Skipped++
+                $result.Note = 'Cache location refused: ' + $rootVerdict.Reason
+                if ($result.Removed -eq 0) { $result.Status = 'Skipped' }
+                continue
+            }
         }
         if ((Test-IsProtectedPath $target.Path) -or -not (Test-CleanPathWithoutLinks $target.Path)) { $result.Skipped++; continue }
         # A cache root that holds a protected folder is a different layout than expected: keep it whole.

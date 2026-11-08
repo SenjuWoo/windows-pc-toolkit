@@ -442,6 +442,40 @@ try {
         [IO.Directory]::Delete($linkShader)
     }
 
+    # 33. A cache folder that became a regular file is refused, never deleted as a stray file.
+    $crossA = Join-Path $libA 'steamapps\shadercache'
+    $crossB = Join-Path $libB 'steamapps\shadercache'
+    foreach ($dir in @($crossA, $crossB)) {
+        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+        [void][IO.Directory]::CreateDirectory($dir)
+    }
+    [void][IO.Directory]::CreateDirectory((Join-Path $crossA '111'))
+    'shader' | Set-Content -LiteralPath (Join-Path $crossA '111\s.bin')
+    $crossEntry = New-Entry 'SteamShaderCache' @($crossA, $crossB)
+    $crossEntry | Add-Member -NotePropertyName RootPolicy -NotePropertyValue 'SteamShader' -Force
+    $crossEntry | Add-Member -NotePropertyName SteamRoots -NotePropertyValue @($libA, $libB) -Force
+    Check ([string]::IsNullOrEmpty((Get-CacheEntryState $crossEntry))) 'Both scanned caches validate before the type change'
+    # The second scanned cache is swapped for a regular file between scan and clean.
+    Remove-Item -LiteralPath $crossB -Recurse -Force
+    'not a cache' | Set-Content -LiteralPath $crossB
+    $r = Invoke-CacheClean -Entry $crossEntry -SteamRoots @($libA, $libB)
+    Check (Test-Path -LiteralPath $crossB -PathType Leaf) 'A cache path replaced by a file survives the cleanup'
+    Check ((Get-Content -LiteralPath $crossB -Raw).Trim() -eq 'not a cache') 'The replacement file is untouched, not truncated or rewritten'
+    Check ($r.Removed -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $crossA '111\s.bin'))) 'The still-valid cache in the same row is cleaned'
+
+    # The scan does not advertise a row whose folder is now a file.
+    $scanRow = @(Get-CacheScan -Catalog @($crossEntry))[0]
+    Check ($scanRow.EligibleBytes -eq 0) 'A file where a cache folder belonged is not counted as eligible'
+
+    # A wildcard row still cleans matching files: that is a real file pattern, not a cache root.
+    $wildRoot = Join-Path $fixture 'wild\logs'
+    [void][IO.Directory]::CreateDirectory($wildRoot)
+    'old' | Set-Content -LiteralPath (Join-Path $wildRoot 'app-2020-01-01.log')
+    (Get-Item -LiteralPath (Join-Path $wildRoot 'app-2020-01-01.log')).LastWriteTime = (Get-Date).AddDays(-30)
+    $wildEntry = New-Entry 'WildcardLogs' @((Join-Path $wildRoot '*.log'))
+    $r = Invoke-CacheClean -Entry $wildEntry
+    Check ($r.Removed -eq 1 -and -not (Test-Path -LiteralPath (Join-Path $wildRoot 'app-2020-01-01.log')) -and $r.Status -eq 'Completed') 'A wildcard log row still removes its matched files'
+
     Write-Host "PASS: $checks cache explorer checks. Fixtures under TEMP only." -ForegroundColor Green
 } finally {
     if (Test-Path -LiteralPath $fixture) {

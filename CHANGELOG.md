@@ -1,5 +1,12 @@
 # Changelog
 
+## Toolkit 3.4.3 (2026-11-08)
+
+- A catalog path that was a cache folder at scan time and a regular file at clean time no longer falls through to plain-file deletion. Literal paths now carry a folder expectation, the root policy is checked before the file/folder split, and a file found where a cache folder belonged is kept with the note "Expected a cache folder, found a file".
+- Measurement applies the same rule, so such a file is not advertised as reclaimable. Wildcard log rows still delete the files their pattern matches.
+- `README.md` advertised a newer download than its links pointed at; all download and release-notes URLs now name the shipped version, and `Validate_All.ps1` fails when any README link or ZIP name disagrees with `SuiteVersion`.
+- Tests: 91 cache explorer checks (was 85), including the directory-to-file crossing and a wildcard row that still cleans.
+
 ## Toolkit 3.4.2 (2026-11-08)
 
 - Fixed the Steam shader cache blocking itself across libraries: the catalog listed `steamapps\shadercache` for every Steam library even when the folder did not exist, and validation rejected the missing ones, so one empty library disabled the whole category while the scan still showed bytes. Only libraries with a shader cache are listed now, and missing folders are skipped instead of refusing the row.
