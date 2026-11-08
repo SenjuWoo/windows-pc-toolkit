@@ -271,9 +271,11 @@ try {
     [void][IO.Directory]::CreateDirectory($cacheA)
     [void][IO.Directory]::CreateDirectory($cacheB)
     'a' | Set-Content -LiteralPath (Join-Path $cacheA 'a.bin')
-    '{"cache_directory":"' + $cacheA.Replace('\', '\\') + '"}' | Set-Content -LiteralPath $cfg
-    Check ((Get-VRChatCachePath -ConfigPath $cfg) -eq $cacheA) 'The configured cache_directory is read'
-    '{"cache_directory":"' + $cacheB.Replace('\', '\\') + '"}' | Set-Content -LiteralPath $cfg
+    # ConvertTo-Json escapes separators itself; a hand-built string is host-dependent.
+    @{ cache_directory = $cacheA } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfg -Encoding UTF8
+    $readA = [IO.Path]::GetFullPath((Get-VRChatCachePath -ConfigPath $cfg))
+    Check ([string]::Equals($readA.TrimEnd([char]92), [IO.Path]::GetFullPath($cacheA).TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) 'The configured cache_directory is read'
+    @{ cache_directory = $cacheB } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfg -Encoding UTF8
     Check ((Get-VRChatCachePath -ConfigPath $cfg) -eq $cacheB) 'A changed cache_directory is re-read, not cached'
 
     # 26. An entry whose configured path is broad is refused at execution, not just at scan.
