@@ -37,18 +37,77 @@ function Get-SteamLibraryRoots {
     return @($local | Select-Object -Unique)
 }
 
+function Test-CleanupRoot {
+    # One validator for every custom or catalog-derived cleanup root. It answers "is this a
+    # narrow, dedicated, link-free folder", never "does the name look like a cache".
+    param([string]$Path, [switch]$AllowAnyName)
+    $fail = { param($why) [pscustomobject]@{ Ok = $false; Reason = $why } }
+    if (-not $Path) { return & $fail 'Empty path' }
+    try { $full = [IO.Path]::GetFullPath($Path) } catch { return & $fail 'Path cannot be resolved' }
+    if (-not (Test-Path -LiteralPath $full -PathType Container)) { return & $fail 'Not an existing folder' }
+    if ($full -match '^[A-Za-z]:\?$') { return & $fail 'Drive root' }
+    $segments = @($full.Split([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), [StringSplitOptions]::RemoveEmptyEntries))
+    if ($segments.Count -lt 3) { return & $fail 'Too close to a drive root' }
+    if (-not (Test-CleanPathWithoutLinks $full)) { return & $fail 'Link in the path' }
+    if (Test-IsProtectedPath $full) { return & $fail 'Protected folder name in the path' }
+    if ([IO.Path]::GetPathRoot($full) -and ([IO.DriveInfo]::new([IO.Path]::GetPathRoot($full)).DriveType -ne 'Fixed')) { return & $fail 'Not a local fixed drive' }
+
+    $blockedUnder = New-Object System.Collections.Generic.List[string]
+    foreach ($path in @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData)) {
+        if ($path) { $blockedUnder.Add([IO.Path]::GetFullPath($path)) }
+    }
+    foreach ($shell in @('MyDocuments', 'Desktop')) {
+        $known = [Environment]::GetFolderPath($shell); if ($known) { $blockedUnder.Add([IO.Path]::GetFullPath($known)) }
+    }
+    foreach ($prefix in @('Downloads', 'Pictures', 'Videos', 'Music')) {
+        $blockedUnder.Add([IO.Path]::GetFullPath((Join-Path $env:USERPROFILE $prefix)))
+    }
+
+    # These may not themselves be a cleanup root, but a cache deep inside them is normal.
+    $blockedExact = New-Object System.Collections.Generic.List[string]
+    foreach ($path in @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA)) {
+        if ($path) { $blockedExact.Add([IO.Path]::GetFullPath($path)) }
+    }
+    $blockedExact.Add([IO.Path]::GetFullPath((Join-Path $env:USERPROFILE 'AppData\LocalLow')))
+
+    $fullTrim = $full.TrimEnd('\')
+    foreach ($path in $blockedUnder) {
+        $p = $path.TrimEnd('\')
+        if ($fullTrim.Equals($p, [StringComparison]::OrdinalIgnoreCase)) { return & $fail ("Reserved location: " + $p) }
+        if ($fullTrim.StartsWith($p + '\', [StringComparison]::OrdinalIgnoreCase)) { return & $fail ("Inside a reserved location: " + $p) }
+    }
+    foreach ($path in $blockedExact) {
+        if ($fullTrim.Equals($path.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return & $fail ("Reserved location: " + $path) }
+    }
+    # A root that contains a protected location is that location's ancestor: deleting it deletes them.
+    foreach ($path in @($blockedUnder) + @($blockedExact)) {
+        $p = $path.TrimEnd('\')
+        if ($p.StartsWith($fullTrim + '\', [StringComparison]::OrdinalIgnoreCase)) { return & $fail ("Contains a protected location: " + $p) }
+    }
+    # A catalog entry already names its exact folder, so the shared-location and naming rules
+    # only gate a custom root (VRChat's configured cache_directory and anything like it).
+    if (-not $AllowAnyName) {
+        foreach ($marker in @('\steamapps', '\Epic Games', '\GOG Games', '\OneDrive', '\Dropbox', '\Google Drive')) {
+            if (($full + '') -like "*$marker*") { return & $fail ("Shared or game-library location") }
+        }
+        $leaf = Split-Path $full -Leaf
+        if ($leaf -notmatch '(?i)cache') { return & $fail 'Folder is not named as a cache' }
+    }
+    return [pscustomobject]@{ Ok = $true; Reason = '' }
+}
+
 function Get-VRChatCachePath {
     # Uses the configured cache_directory when it is a local fixed path; otherwise the default.
+    param([string]$ConfigPath)
     $default = Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\Cache-WindowsPlayer'
-    $config = Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\config.json'
+    $config = if ($ConfigPath) { $ConfigPath } else { Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\config.json' }
     if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { return $default }
     try { $json = Get-Content -LiteralPath $config -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $default }
     $custom = $json.cache_directory
     if (-not $custom) { return $default }
-    try {
-        if ([IO.DriveInfo]::new([IO.Path]::GetPathRoot($custom)).DriveType -ne 'Fixed') { return $default }
-        return [IO.Path]::GetFullPath($custom)
-    } catch { return $default }
+    # The configured path is honoured, but it is only deletable when Test-CleanupRoot accepts it;
+    # an unsafe path is shown and kept, never replaced by a different location.
+    try { return [IO.Path]::GetFullPath($custom) } catch { return $default }
 }
 
 function Get-CacheCatalog {
@@ -77,7 +136,7 @@ function Get-CacheCatalog {
             Paths=$shaderPaths; Impact='Shaders recompile on next launch: stutter and possible re-download. Never touches common, compatdata or manifests.'; Source='Steam support: shader cache can be rebuilt' }
         [pscustomobject]@{ Id='SteamStaging'; Section='Gaming'; Label='Steam staging temp (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
             Paths=$steamTemp; Impact='An interrupted update can leave files here that Steam still needs; nothing is removed.'; Source='steamapps\temp' }
-        [pscustomobject]@{ Id='VRChatCache'; Section='Gaming'; Label='VRChat downloaded content cache'; Risk='CAREFUL'; Delete=$true; AgeDays=0; RequireProcess='VRChat';
+        [pscustomobject]@{ Id='VRChatCache'; Section='Gaming'; Label='VRChat downloaded content cache'; Risk='CAREFUL'; Delete=$true; AgeDays=0; RequireProcess='VRChat'; RootPolicy='DedicatedCache';
             Paths=@((Get-VRChatCachePath)); Impact='Avatars and worlds download again. config.json, screenshots and local moderation data are outside this folder.'; Source='config.json cache_directory, else the documented default' }
         [pscustomobject]@{ Id='RobloxLogs'; Section='Gaming'; Label='Roblox diagnostic logs'; Risk='SAFE'; Delete=$true; AgeDays=7;
             Paths=@("$L\Roblox\logs\*.log*"); Impact='Logs only; Studio autosaves, projects, versions and plugins are untouched.'; Source='Roblox Studio debugging docs' }
@@ -96,6 +155,14 @@ function Get-CacheCatalog {
             Paths=@("$L\UnrealEngine\Common\DerivedDataCache"); Impact='Shader and asset derivatives rebuild: long first launch.'; Source='UE engine DDC' }
         [pscustomobject]@{ Id='GradleCaches'; Section='Dev'; Label='Gradle build caches'; Risk='STRICT'; Delete=$true; AgeDays=0; RequireProcess='java';
             Paths=@("$U\.gradle\caches"); Impact='Next build re-resolves dependencies and recompiles; no project source is touched.'; Source='Gradle default cache' }
+        [pscustomobject]@{ Id='YarnCache'; Section='Dev'; Label='Yarn package cache'; Risk='SAFE'; Delete=$true; AgeDays=0;
+            Paths=@("$L\Yarn\Cache", "$L\Yarn\Berry\cache"); Impact='Packages download again on the next install.'; Source='Yarn cache folder' }
+        [pscustomobject]@{ Id='PnpmStore'; Section='Dev'; Label='pnpm content-addressable store (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
+            Paths=@("$L\pnpm\store"); Impact='Shared by hard links with every project; use "pnpm store prune" instead of deleting it.'; Source='pnpm store path' }
+        [pscustomobject]@{ Id='GpuShaderCaches'; Section='Gaming'; Label='GPU driver shader caches (opt-in)'; Risk='STRICT'; Delete=$true; AgeDays=0;
+            Paths=@("$L\NVIDIA\DXCache", "$L\NVIDIA\GLCache", "$L\AMD\DxCache", "$L\AMD\DxcCache", "$L\AMD\GLCache"); Impact='Shaders recompile on next launch: stutter in the first minutes. Opt in only when the driver cache is suspected.'; Source='NVIDIA and AMD document these as rebuildable driver caches' }
+        [pscustomobject]@{ Id='D3DShaderCache'; Section='Gaming'; Label='DirectX shader cache'; Risk='STRICT'; Delete=$true; AgeDays=0;
+            Paths=@("$L\D3DSCache"); Impact='Shaders recompile on next launch; a few minutes of stutter, no user data.'; Source='DirectX shader cache is per-user and rebuildable' }
         [pscustomobject]@{ Id='UnityLibrary'; Section='Dev'; Label='Unity project Library folders (report only)'; Risk='REPORT'; Delete=$false; AgeDays=0;
             Paths=@(); Impact='Per-project rebuild can take minutes to hours; select the project manually.'; Source='Not enumerated: project location is not discoverable safely' }
     )
@@ -109,7 +176,12 @@ function Resolve-CacheTargets {
         $path = [Environment]::ExpandEnvironmentVariables([string]$raw)
         if (-not $path) { continue }
         if ($path -match '[*?]') {
-            foreach ($item in @(Get-Item -Path $path -Force -ErrorAction SilentlyContinue)) {
+            # Escape brackets and other wildcard characters in the literal folder part only, so a
+            # profile such as 'O''Brien [test]' cannot be misread as a pattern.
+            $star = $path.IndexOfAny([char[]]'*?')
+            $cut = $path.LastIndexOf([IO.Path]::DirectorySeparatorChar, $star)
+            $patternPath = if ($cut -ge 0) { ([WildcardPattern]::Escape($path.Substring(0, $cut + 1))) + $path.Substring($cut + 1) } else { $path }
+            foreach ($item in @(Get-Item -Path $patternPath -Force -ErrorAction SilentlyContinue)) {
                 [pscustomobject]@{ Path = $item.FullName; IsContainer = [bool]$item.PSIsContainer }
             }
         } elseif (Test-Path -LiteralPath $path -PathType Container) {
@@ -145,6 +217,12 @@ function Get-CacheFilesBounded {
 function Get-CacheEntryState {
     param($Entry)
     if ($Entry.Signature -and -not (Test-Path -LiteralPath $Entry.Signature)) { return 'Layout not verified on this PC' }
+    if ($Entry.RootPolicy -eq 'DedicatedCache') {
+        foreach ($path in @($Entry.Paths)) {
+            $verdict = Test-CleanupRoot -Path $path
+            if (-not $verdict.Ok) { return ('Cache location refused: ' + $verdict.Reason) }
+        }
+    }
     if ($Entry.RequireProcess -and @(Get-Process -Name $Entry.RequireProcess -ErrorAction SilentlyContinue).Count) { return "$($Entry.RequireProcess) is running" }
     return ''
 }
@@ -160,6 +238,7 @@ function Get-CacheEntryMeasure {
     foreach ($target in $targets) {
         $roots = if ($target.IsContainer) { @($target.Path) } else { @() }
         if (-not $target.IsContainer) {
+            if ((Test-IsProtectedPath $target.Path) -or -not (Test-CleanPathWithoutLinks $target.Path)) { continue }
             $file = Get-Item -LiteralPath $target.Path -Force -ErrorAction SilentlyContinue
             if ($file) {
                 $discovered += $file.Length
@@ -243,10 +322,29 @@ function Export-CacheScan {
     return $path
 }
 
+function Test-CacheEntryFresh {
+    # Execution-time revalidation. A scan row is a claim about the past: by the time the operator
+    # confirms, the configured location may have moved. Only a config that still parses counts;
+    # an unreadable or absent config proves nothing either way, so the root check decides.
+    param($Entry)
+    if ($Entry.Id -ne 'VRChatCache') { return $null }
+    $config = Join-Path $env:LOCALAPPDATA '..\LocalLow\VRChat\VRChat\config.json'
+    if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { return $null }
+    try { $json = Get-Content -LiteralPath $config -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return $null }
+    if (-not $json.cache_directory) { return $null }
+    try { $configured = [IO.Path]::GetFullPath($json.cache_directory) } catch { return 'VRChat cache path cannot be resolved' }
+    foreach ($path in @($Entry.Paths)) {
+        if ([string]::Equals([IO.Path]::GetFullPath($path).TrimEnd('\'), $configured.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    }
+    return 'VRChat cache location changed since the scan; rescan.'
+}
+
 function Invoke-CacheClean {
     param($Entry)
     $result = [pscustomobject]@{ Id = $Entry.Id; Status = 'Completed'; Removed = 0; Skipped = 0; Bytes = [long]0; Note = '' }
     if (-not $Entry.Delete) { $result.Status = 'Skipped'; $result.Note = 'Review only; kept all files.'; return $result }
+    $stale = Test-CacheEntryFresh $Entry
+    if ($stale) { $result.Status = 'Skipped'; $result.Note = $stale; return $result }
     $state = Get-CacheEntryState $Entry
     if ($state) { $result.Status = 'Skipped'; $result.Note = $state; return $result }
     $cutoff = if ($Entry.AgeDays) { (Get-Date).AddDays(-[double]$Entry.AgeDays) } else { $null }
@@ -257,6 +355,13 @@ function Invoke-CacheClean {
             if ($cutoff -and $file.LastWriteTime -ge $cutoff) { $result.Skipped++; continue }
             if (Remove-ItemSafe -Path $file.FullName) { $result.Removed++; $result.Bytes += [long]$file.Length }
             else { $result.Skipped++ }
+            continue
+        }
+        $rootVerdict = Test-CleanupRoot -Path $target.Path -AllowAnyName
+        if (-not $rootVerdict.Ok) {
+            $result.Skipped++
+            $result.Note = 'Cache location refused: ' + $rootVerdict.Reason
+            if ($result.Removed -eq 0) { $result.Status = 'Skipped' }
             continue
         }
         if ((Test-IsProtectedPath $target.Path) -or -not (Test-CleanPathWithoutLinks $target.Path)) { $result.Skipped++; continue }
@@ -270,11 +375,20 @@ function Invoke-CacheClean {
             if (Remove-ItemSafe -Path $file.FullName) { $result.Removed++; $result.Bytes += [long]$file.Length }
             else { $result.Skipped++ }
         }
-        # Remove only what became empty; never a directory that still holds files.
-        Get-ChildItem -LiteralPath $target.Path -Recurse -Force -Directory -ErrorAction SilentlyContinue |
-            Sort-Object { $_.FullName.Length } -Descending |
-            Where-Object { -not @(Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue).Count -and -not (Test-IsProtectedPath $_.FullName) } |
-            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        # Remove only what became empty, deepest first. The walk is capped and never follows a link.
+        $dirs = New-Object System.Collections.Generic.List[string]
+        $stack = New-Object Collections.Stack; $stack.Push($target.Path)
+        while ($stack.Count -and $dirs.Count -lt 5000) {
+            foreach ($item in (Get-ChildItem -LiteralPath $stack.Pop() -Force -Directory -ErrorAction SilentlyContinue)) {
+                if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+                if (Test-IsProtectedPath $item.FullName) { continue }
+                $dirs.Add($item.FullName); $stack.Push($item.FullName)
+            }
+        }
+        foreach ($dir in ($dirs | Sort-Object { $_.Length } -Descending)) {
+            if (@(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue).Count) { continue }
+            Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+        }
     }
     return $result
 }

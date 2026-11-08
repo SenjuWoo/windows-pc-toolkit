@@ -1,5 +1,15 @@
 # Changelog
 
+## Toolkit 3.4.0 (2026-11-08)
+
+- One cleanup-root validator now decides what may be deleted as a cache: drive roots, Windows/Program Files/ProgramData, profile, AppData and LocalLow roots, user libraries, game libraries and cloud-sync folders are refused, as is any path that contains one of them. A custom root must also be named as a cache.
+- VRChat honours `config.json` `cache_directory` only when it passes that validator; an unsafe or unparseable value is measured and kept, never replaced by another location. The path is re-read at execution time, so a config change after the scan is refused.
+- Every container target is re-checked for links, reserved locations and containment immediately before deletion, and a refusal marks the row skipped with its reason.
+- Skyrim and modding cleanup re-derive processes, the Documents known folder, cloud-sync state and the exact approved target at execution time. A stale or forged scan row cannot authorize a deletion; a moved folder is refused. `Remove-SkyrimLogFile` no longer accepts a caller-supplied root or pattern.
+- New modding coverage: MO2 `logs` (`mo_interface*.log`, `usvfs-*.log`), Vortex `vortex*.log`, DynDOLOD/TexGen/LODGen `*_log.txt`. Portable installs are listed only when their folder is supplied; mods, profiles, overwrite, downloads, state and generated LOD stay.
+- New cache categories: Yarn (SAFE), pnpm store (REPORT), GPU driver shader caches and DirectX `D3DSCache` (STRICT, opt-in). Catalog is 20 categories: 13 deletable, 7 report-only.
+- `pc-cleaner/README.md` corrected: Steam staging and Epic webcache are report-only, as the catalog always said. Cleaner header version matches the shipped version.
+
 ## Toolkit 3.3.0 (2026-11-07)
 
 - Cache Explorer fixes: a wildcard directory pattern (Epic style) is measured as directories instead of as files, so the scan no longer reports zero bytes for a cache it would clean; the scan enumerates depth-first and stops at the cap instead of materialising the whole tree; age rules are applied to each file immediately before deletion, so a fresh file inside an old folder survives and the estimate matches the bytes removed; the scan shows eligible bytes next to total found, unique report names, and a detail view with every path, source and rebuild impact.
