@@ -276,7 +276,8 @@ try {
     $readA = [IO.Path]::GetFullPath((Get-VRChatCachePath -ConfigPath $cfg))
     Check ([string]::Equals($readA.TrimEnd([char]92), [IO.Path]::GetFullPath($cacheA).TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) 'The configured cache_directory is read'
     @{ cache_directory = $cacheB } | ConvertTo-Json -Compress | Set-Content -LiteralPath $cfg -Encoding UTF8
-    Check ((Get-VRChatCachePath -ConfigPath $cfg) -eq $cacheB) 'A changed cache_directory is re-read, not cached'
+    $readB = [IO.Path]::GetFullPath((Get-VRChatCachePath -ConfigPath $cfg))
+    Check ([string]::Equals($readB.TrimEnd([char]92), [IO.Path]::GetFullPath($cacheB).TrimEnd([char]92), [StringComparison]::OrdinalIgnoreCase)) 'A changed cache_directory is re-read, not cached'
 
     # 26. An entry whose configured path is broad is refused at execution, not just at scan.
     $unsafe = [pscustomobject]@{ Id = 'VRChatCache'; Section = 'Gaming'; Label = 'VRChat cache'; Risk = 'CAREFUL'; Delete = $true
