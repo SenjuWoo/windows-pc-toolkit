@@ -4,15 +4,21 @@
 
 Deliver a safe, usable native Windows toolkit for fresh installs and existing PCs, including a OneDrive local-folder preflight. Preserve the configured host, personal settings and previous releases.
 
-**3.4.1 is published and delivered.** Release commit `8e304993bf0905e33598c4c6be3de0b83fe645d0`, annotated tag `v3.4.1`, published 2026-11-08. Payload re-downloaded, matched blob for blob and tested after extraction (770 assertions). Delivered copy `Windows-PC-Toolkit-3.4.1`, 79 files.
+**3.4.2 is published and delivered.** Release commit `9750079b6d13c5c4aa924e65114e51bceaccdec6`, annotated tag `v3.4.2`, published 2026-11-08. Payload re-downloaded, matched blob for blob and tested after extraction (779 assertions). Delivered copy `Windows-PC-Toolkit-3.4.2`, 80 files.
 
 ## Published release, verified 2026-11-08
 
-- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.1 - tag resolves to `8e304993bf0905e33598c4c6be3de0b83fe645d0`.
-- CI `42515070922`, push `42515070199`; all checks success on that SHA. PR #26 merged.
+- Release: https://github.com/SenjuWoo/windows-pc-toolkit/releases/tag/v3.4.2 - tag resolves to `9750079b6d13c5c4aa924e65114e51bceaccdec6`.
+- CI `42517312167`, push `42517311949`; all checks success on that SHA. PR #28 merged.
 - Alerts 0/0/0; Code Quality unavailable.
-- `Windows-PC-Toolkit-3.4.1.zip` - 413,202 bytes, SHA-256 `ed2b423a0b745eae9bb634226d5df46f03a93a247be760b61ae5162bd8859c24`, 79 files, 0 raw mismatches. Provenance `835c18f397ec06518b9e8fedf3b2ebb25e19975f907f98fb7acae3b0489acbf9`; SHA256SUMS `d2f3d9e8e81c808e1c597dafc109b62f37d632d50d2cb8e56341192686312920`.
-- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.1`: smoke passes (66 controls, 20 choices).
+- `Windows-PC-Toolkit-3.4.2.zip` - 415,686 bytes, SHA-256 `4fd2ffdfffc9af50ec5e5bcce981d0414717684180a436e12f94e68ed99d0efb`, 80 files, 0 raw mismatches. Provenance `47b901dbbd6dc2cd41192a0f3006b731f900874571cbbd3ce42affc4cb22a35d`; SHA256SUMS `61ebb3e096b8b85f1d0ea69e5074ba3de96c063a0728df3530a95cea901ca556`.
+- Delivered copy `Z:\Backup\Ai apps\Windows pc toolkit\Windows-PC-Toolkit-3.4.2`: smoke passes (66 controls, 20 choices).
+
+## What 3.4.2 changed
+
+- Steam shader cache no longer blocks itself across libraries: only libraries with a `shadercache` folder are listed, missing folders are skipped at validation, and an all-absent row reports "No cache folder present on this PC".
+- Steam's library list is re-resolved immediately before deletion; a library removed, unplugged or repointed after the scan is refused and its files survive.
+- Tests: 779 assertions (85 cache explorer).
 
 ## What 3.4.1 changed
 
