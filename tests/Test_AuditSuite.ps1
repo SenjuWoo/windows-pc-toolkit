@@ -25,6 +25,17 @@ try {
     Check ((Get-ItemPropertyValue $key Text) -ceq 'ORIGINAL') 'User string casing survives undo conflict'
     $run=New-SuiteRun 'Repair'
     Fails { Invoke-SuiteUndo $run.Path } 'Repair/empty journals cannot claim successful undo'
+    # A transient Windows lock on an existing report must not lose a completed run, and a
+    # permanent one must fail cleanly without leaving a temporary file behind.
+    $lockedPath=Join-Path (Get-SuiteDataRoot) 'Runs\locked.json'
+    Save-SuiteJson $lockedPath ([pscustomobject]@{Schema=1;Value='first'})
+    $handle=[IO.File]::Open($lockedPath,'Open','ReadWrite','None')
+    try { Fails { Save-SuiteJson $lockedPath ([pscustomobject]@{Schema=1;Value='second'}) } 'A permanently locked report fails instead of silently keeping stale content' }
+    finally { $handle.Dispose() }
+    Check (@(Get-ChildItem -LiteralPath (Split-Path $lockedPath) -Filter '*.tmp' -File).Count -eq 0) 'A failed report write leaves no temporary file behind'
+    Save-SuiteJson $lockedPath ([pscustomobject]@{Schema=1;Value='second'})
+    Check ((Get-Content -LiteralPath $lockedPath -Raw | ConvertFrom-Json).Value -eq 'second') 'The report writes again once the lock is released'
+    Remove-Item -LiteralPath $lockedPath -Force
     $run.Path='C:\untrusted-report-path.json'; Save-SuiteJson (Join-Path (Get-SuiteDataRoot) ('Runs\'+$run.Id+'.json')) $run
     $history=@(Get-SuiteHistory)
     Check (@($history | Where-Object { $_.Path -eq 'C:\untrusted-report-path.json' }).Count -eq 0) 'History uses actual file path rather than a report-supplied path'
@@ -257,6 +268,11 @@ try {
     function Start-Process { param($FilePath) $script:openedGuide=$FilePath }
     Invoke-ToolkitButton $script:controls.OpenOneDriveRecovery $null
     Check ($script:openedGuide -eq 'https://support.microsoft.com/en-us/onedrive/back-up-your-folders-with-onedrive') 'Recovery opens supported instructions instead of a registry migration'
+    # The markup carries the accessible names; this proves the loaded controls expose
+    # them to the accessibility tree instead of only looking right in the file.
+    foreach ($name in @('OneDriveGrid','StartupGrid','AppsGrid','HistoryGrid','ServicesGrid','AdapterCombo','ProviderCombo','ResultText')) {
+        Check (-not [string]::IsNullOrWhiteSpace([Windows.Automation.AutomationProperties]::GetName($script:controls[$name]))) "$name exposes an accessible name"
+    }
     $script:window.Close()
     Write-Host "PASS: $checks Suite audit checks."
 } finally {

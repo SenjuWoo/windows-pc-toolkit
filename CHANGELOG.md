@@ -1,5 +1,12 @@
 # Changelog
 
+## Toolkit 3.1.2 (2026-11-07)
+
+- Name the OneDrive, startup, app, recovery and service grids, the adapter and DNS provider selectors, and the result log for screen readers. Buttons already expose their visible text; these controls were announced only by type.
+- Fail validation when the module version, the dashboard label and the changelog's top entry disagree, so a build cannot misreport its own version.
+- Publish the release builder (`tests/tools/build_release.py`) and the release steps (`docs/RELEASING.md`) with the repository, so the payload-to-commit check recorded in `release-provenance.json` can be reproduced outside the author's machine.
+- No change to any optimization, repair, cleanup, debloat or DNS action.
+
 ## Toolkit 3.1.1 (2026-10-24)
 
 - Fix the OneDrive preflight accepting relative, unresolved, invalid, missing or linked locations as safe custom folders. Check the modern local Documents/Pictures/Music/Videos aliases too; preserve valid custom local directories.
